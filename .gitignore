@@ -1,10 +1,9 @@
 .env
 
 # airflow_settings.yaml normalmente se ignora porque ahí van credenciales.
-# El nuestro sólo declara la URL de la PokéAPI, que es pública, así que se
+# El nuestro sólo declara la URL de la API, que es pública, así que se
 # versiona para que la conexión exista al primer `astro dev start`.
 # Cuando tu proyecto necesite una API key, sacala de acá.
-logs/
 include/output/
 __pycache__/
 *.pyc
