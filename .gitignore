@@ -1,12 +1,16 @@
-.env
+# Datos crudos (Bronze) — pesados, se regeneran con el DAG
+include/bronze/
+include/silver/
 
-# airflow_settings.yaml normalmente se ignora porque ahí van credenciales.
-# El nuestro sólo declara la URL de la API, que es pública, así que se
-# versiona para que la conexión exista al primer `astro dev start`.
-# Cuando tu proyecto necesite una API key, sacala de acá.
-include/output/
+# CLAUDE.md es instrucciones para Claude Code, no parte del proyecto
+CLAUDE.md
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 
-# El respaldo fresco se regenera solo; la semilla (fifa_snapshot.csv) sí se versiona.
-include/frozen/ultimo_ok.csv
+# Entorno
+.env
+.venv/
+venv/
