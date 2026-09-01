@@ -1,151 +1,151 @@
 # F1-PredictPositions
 
-Pipeline de datos de Fórmula 1 para predecir, **antes del inicio de cada carrera**, el ranking del Top 10.
+Pipeline de Airflow para construir la capa Bronze de datos de Fórmula 1 y
+servir como base para un modelo predictivo del Top 10 antes de cada carrera.
 
 ## Pregunta de investigación
 
-> ¿Es posible predecir, antes del inicio de una carrera de F1, el ranking final de los diez primeros pilotos usando exclusivamente información disponible antes de la carrera?
+> ¿Es posible predecir, antes del inicio de una carrera de F1, el ranking final
+> de los diez primeros pilotos usando únicamente información disponible antes de
+> la carrera?
 
-**Unidad de análisis:** una fila = un piloto en una carrera (`season × round × driver_id`).
+**Unidad de análisis:** una fila representa a un piloto en una carrera
+(`season × round × driver_id`).
 
 ## Fuentes de datos
 
 | Fuente | Cobertura | Qué aporta |
 |---|---|---|
 | [Jolpica-F1](https://api.jolpi.ca/ergast/f1) | 1950–actual | Resultados, grid, standings |
-| [FastF1](https://docs.fastf1.dev/) | 2018+ | Qualifying detallado, laps, tiempos por sector |
-| [OpenF1](https://openf1.org/) | 2023+ | Clima, pits, stints |
+| [FastF1](https://docs.fastf1.dev/) | 2018+ | Qualifying, laps y tiempos por sector |
+| [OpenF1](https://openf1.org/) | 2023+ | Clima, pits y stints |
 
 ## Arquitectura
 
-```
+```text
 API (Jolpica / FastF1 / OpenF1)
         │
         ▼
-   include/bronze/       ← datos crudos (JSON/CSV), particionados por fuente y season/round
+   include/bronze/       ← datos crudos (JSON/CSV), particionados por fuente
         │
-        ▼  (próxima iteración)
-   include/silver/        ← dataset construido, CSV
+        ▼
+   include/silver/       ← dataset construido (próxima etapa)
 ```
 
-El DAG de Airflow (`dags/f1_ingest.py`) orquesta la ingesta Bronze.
+El DAG principal es [dags/f1_ingest.py](dags/f1_ingest.py), que orquesta la ingesta
+Bronze desde las tres fuentes.
 
 ## Estructura del repositorio
 
-```
+```text
 ├── dags/
 │   └── f1_ingest.py              # DAG Airflow — ingesta Bronze
 ├── include/
 │   ├── f1/
 │   │   ├── __init__.py
-│   │   ├── jolpica.py            # Cliente Jolpica con caché + 429
-│   │   ├── openf1.py             # Cliente OpenF1 con caché + 429
-│   │   ├── fastf1_source.py      # Ingesta FastF1 (caché nativo)
-│   │   └── bronze.py             # Orquestador de prefetch
+│   │   ├── bronze.py             # Orquestador de prefetch
+│   │   ├── fastf1_source.py      # Ingesta FastF1
+│   │   ├── jolpica.py            # Cliente Jolpica con caché + retry
+│   │   ├── openf1.py             # Cliente OpenF1 con caché + retry
+│   │   └── __init__.py
 │   └── bronze/                   # Datos crudos (gitignored)
 ├── proyecto_f1_colab.ipynb       # Prototipo original en Colab
+├── docker-compose.yaml           # Stack local de Airflow + Postgres
+├── Dockerfile                    # Imagen base para el entorno
 ├── requirements.txt
+├── packages.txt
+├── airflow_settings.yaml
+├── .env
+├── .astro/
 ├── .gitignore
 └── README.md
 ```
 
 ## Requisitos previos
 
-- **Python 3.10+**
-- **Docker Desktop** corriendo
-- **Airflow** (con Docker o Astronomer/Astro CLI)
+- Python 3.10+
+- Docker Desktop levantado
 - Git
+- Airflow o Astro CLI para ejecución local
 
-## Instalación paso a paso
+## Arranque rápido
 
-### 1. Clonar el repositorio
-
-```bash
-git clone https://github.com/Maaurimiranda/F1-PredictPositions.git
-cd F1-PredictPositions
-```
-
-### 2. Instalar dependencias Python
-
-Si querés probar los clientes fuera de Airflow (local):
+### Opción A: Docker Compose
 
 ```bash
-pip install -r requirements.txt
+cd "C:\Proyecto Ciencia de Datos\F1-PredictPositions"
+docker compose up -d --build
 ```
 
-### 3. Verificar que los clientes funcionan
+Luego abrir:
 
-Probá que el cliente Jolpica baja y cachea correctamente:
-
-```bash
-python include/f1/jolpica.py
+```text
+http://localhost:8080
 ```
 
-Debería imprimir `OK — caché funciona: include/bronze/jolpica/2024.json`.
+Credenciales por defecto del stack local:
 
-### 4. Configurar Airflow
+```text
+usuario: admin
+password: admin
+```
 
-El proyecto necesita que Airflow vea las carpetas `dags/` e `include/`.
-
-**Con Astronomer (Astro CLI):**
+### Opción B: Astro CLI
 
 ```bash
 astro dev start
 ```
 
-**Con docker-compose (Airflow vanilla):**
-
-Asegurate de que los volúmenes monten:
-
-- `./dags` → `/opt/airflow/dags`
-- `./include` → `/opt/airflow/include`
-
-Y que `include/` sea un **volumen persistente** (si no, la caché Bronze se pierde al recrear el contenedor).
-
-Instalar las dependencias dentro del contenedor:
-
-```bash
-docker exec -it <airflow-worker> pip install -r /opt/airflow/requirements.txt
-```
-
-### 5. Ejecutar el pipeline
+## Ejecutar el pipeline
 
 Desde la UI de Airflow:
 
-1. Buscar el DAG **`f1_ingest`**.
-2. Activarlo (toggle ON).
-3. Disparar manualmente (botón "Trigger DAG").
+1. Buscar el DAG `f1_ingest`
+2. Activarlo (toggle ON)
+3. Dispararlo manualmente
 
-O desde la terminal:
+O desde terminal:
 
 ```bash
 airflow dags trigger f1_ingest
 ```
 
-### 6. Verificar la ejecución
+## Verificación
 
-- En la UI de Airflow, todas las tareas deben terminar en **SUCCESS** (verde).
-- La tarea `verificar_bronze` loguea la cobertura de archivos por fuente.
-- En disco, `include/bronze/` debe tener subcarpetas `jolpica/`, `openf1/`, `fastf1/`, `fastf1_cache/`.
+Tras la corrida, debería quedar en disco una estructura similar a:
 
-### 7. Reejecución
+```text
+include/bronze/
+├── jolpica/
+├── openf1/
+├── fastf1/
+├── fastf1_cache/
+```
 
-Disparar el DAG de nuevo es seguro: **no vuelve a descargar** lo que ya está en `include/bronze/`. Solo baja lo faltante. Una corrida interrumpida puede continuarse sin perder trabajo.
+La tarea `verificar_bronze` imprime el resumen de cobertura por fuente.
 
-## Variables de entorno (opcionales)
+## Reejecución
+
+La ingesta es idempotente. Si los archivos ya existen, no se vuelven a descargar;
+la corrida reintenta sólo lo faltante. Eso hace que el pipeline sea seguro para
+repetir ejecuciones en una demo o en una presentación.
+
+## Variables de entorno
 
 | Variable | Descripción | Default |
 |---|---|---|
-| `F1_BRONZE_DIR` | Ruta donde se guardan los datos crudos | `include/bronze/` (relativo al repo) |
+| `F1_BRONZE_DIR` | Ruta donde se guardan los datos crudos | `include/bronze/` |
 
-## Notas para la entrega
+## Próximos pasos
 
-- **NO** depender de ejecutar una descarga completa en vivo durante la presentación. La corrida debe estar hecha previamente.
-- Cada integrante debe poder explicar qué hace cada tarea del DAG.
-- El notebook `proyecto_f1_colab.ipynb` contiene la lógica original probada y el chequeo de calidad (`chequear_calidad`).
+- Implementar la capa Silver con `transform.py` y `features.py`
+- Generar `include/silver/dataset.csv`
+- Agregar validaciones automáticas de calidad
+- Refinar la predicción del Top 10 con features previas a la carrera
 
-## Próximos pasos (Silver)
+## Notas de entrega
 
-- Migrar `resultados_a_filas`, `driver_standings_before` y rolling features a `include/f1/transform.py` y `include/f1/features.py`.
-- Agregar tarea al DAG que construya el dataset desde Bronze y exporte a `include/silver/dataset.csv`.
-- Gate de calidad automatizado en el DAG.
+- No depender de ejecutar una descarga completa en vivo durante la presentación.
+- Cada integrante debe poder explicar cada tarea del DAG.
+- El notebook `proyecto_f1_colab.ipynb` conserva la lógica prototipada y los
+  chequeos de calidad iniciales.

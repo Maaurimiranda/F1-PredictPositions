@@ -1,4 +1,23 @@
+# Conexiones, pools y variables para el entorno LOCAL de desarrollo.
+# Astro CLI las carga al hacer `astro dev start`.
+# Para este proyecto no hace falta una conexión real, pero dejamos el archivo
+# en el formato estándar para que el repositorio quede consistente con el
+# ejemplo de referencia.
+
 airflow:
-  connections: []
-  pools: []
-  variables: []
+  connections:
+    - conn_id:
+      conn_type:
+      conn_host:
+      conn_schema:
+      conn_login:
+      conn_password:
+      conn_port:
+      conn_extra:
+  pools:
+    - pool_name:
+      pool_slot:
+      pool_description:
+  variables:
+    - variable_name:
+      variable_value:
