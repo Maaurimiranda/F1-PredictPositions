@@ -1,9 +1,9 @@
 import pendulum
 from airflow.sdk import dag, task
 
-SEASONS_JOLPICA = list(range(2010, 2025))
-YEARS_OPENF1 = list(range(2023, 2025))
-YEARS_FASTF1 = list(range(2018, 2025))
+SEASONS_JOLPICA = list(range(2022, 2027))
+YEARS_OPENF1 = list(range(2022, 2027))
+YEARS_FASTF1 = list(range(2022, 2027))
 
 
 @dag(
@@ -13,8 +13,8 @@ YEARS_FASTF1 = list(range(2018, 2025))
     start_date=pendulum.datetime(2024, 1, 1, tz="America/Argentina/Buenos_Aires"),
     catchup=False,
     tags=["f1", "bronze", "ingesta", "ciencia-de-datos"],
-    max_active_tasks=8,
-    default_args={"retries": 2, "retry_delay": pendulum.duration(seconds=30)},
+    max_active_tasks=3,
+    default_args={"retries": 2, "retry_delay": pendulum.duration(minutes=1)},
 )
 def f1_ingest():
 
