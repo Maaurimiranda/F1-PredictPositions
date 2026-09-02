@@ -27,8 +27,9 @@ BRONZE_DIR = Path(
 # se necesiten features concretas (car_data, intervals, etc.).
 SESSION_ENDPOINTS = ["weather", "pit", "stints", "position"]
 
-# Solo años con cobertura en OpenF1.
-YEARS = list(range(2023, 2025))  # 2023–2024
+# Única fuente de verdad de años con cobertura en OpenF1.
+# El DAG importa esta constante: no duplicar el rango allá.
+YEARS = list(range(2023, 2027))  # 2023–2026
 
 
 def _cache_path(endpoint: str, params_key: str) -> Path:
@@ -46,6 +47,10 @@ def fetch_openf1(endpoint: str, params: dict,
     """GET ``BASE_URL/{endpoint}?{params}`` con caché en disco.
 
     OpenF1 devuelve listas JSON (no objetos envolventes tipo MRData).
+
+    Un 404 significa "no hay cobertura para esos params" y devuelve ``[]``
+    sin reintentar. El resto de los 4xx corta de inmediato con RuntimeError.
+    Solo 429, 5xx y errores de red disparan reintentos con backoff.
     """
     key = _params_to_key(params)
     destino = _cache_path(endpoint, key)
@@ -54,7 +59,7 @@ def fetch_openf1(endpoint: str, params: dict,
         return json.loads(destino.read_text(encoding="utf-8"))
 
     url = f"{BASE_URL}/{endpoint}"
-    ultimo_error = None
+    ultimo_error = "se agotaron los reintentos sin respuesta válida"
 
     for intento in range(retries):
         try:
@@ -63,8 +68,15 @@ def fetch_openf1(endpoint: str, params: dict,
             if resp.status_code == 429:
                 retry_after = resp.headers.get("Retry-After")
                 espera = float(retry_after) if retry_after else backoff ** intento
+                ultimo_error = "429 Too Many Requests"
                 time.sleep(espera)
                 continue
+
+            if resp.status_code == 404:
+                # Sin cobertura. No se cachea: si OpenF1 carga estos datos
+                # más adelante, no queremos un archivo vacío tapando la
+                # consulta para siempre.
+                return []
 
             resp.raise_for_status()
             data = resp.json()
@@ -72,6 +84,16 @@ def fetch_openf1(endpoint: str, params: dict,
             destino.parent.mkdir(parents=True, exist_ok=True)
             destino.write_text(json.dumps(data), encoding="utf-8")
             return data
+
+        except requests.HTTPError as e:
+            # Este except DEBE ir antes que RequestException (es subclase).
+            status = e.response.status_code if e.response is not None else None
+            if status is not None and 400 <= status < 500:
+                raise RuntimeError(
+                    f"OpenF1 rechazó {url} params={params}: {e}"
+                ) from e
+            ultimo_error = e
+            time.sleep(backoff ** intento)
 
         except requests.RequestException as e:
             ultimo_error = e
@@ -85,10 +107,18 @@ def fetch_openf1(endpoint: str, params: dict,
 def prefetch_openf1(year: int) -> dict:
     """Baja índice de meetings/sessions y datos por sesión de carrera.
 
-    Retorna un resumen ``{sessions_bajadas: int, errores: int}``.
+    Retorna ``{sessions_bajadas, errores, omitido}``.
     """
+    if year not in YEARS:
+        print(f"  openf1: {year} fuera del rango con cobertura, se omite")
+        return {"sessions_bajadas": 0, "errores": 0, "omitido": True}
+
     meetings = fetch_openf1("meetings", {"year": year})
     sessions = fetch_openf1("sessions", {"year": year})
+
+    if not meetings or not sessions:
+        print(f"  openf1: sin datos para {year}, se omite")
+        return {"sessions_bajadas": 0, "errores": 0, "omitido": True}
 
     # Solo sesiones de carrera (session_type "Race").
     race_sessions = [
@@ -110,7 +140,7 @@ def prefetch_openf1(year: int) -> dict:
                 errores += 1
             time.sleep(0.3)
 
-    return {"sessions_bajadas": bajadas, "errores": errores}
+    return {"sessions_bajadas": bajadas, "errores": errores, "omitido": False}
 
 
 if __name__ == "__main__":
@@ -119,3 +149,7 @@ if __name__ == "__main__":
     archivo = _cache_path("meetings", "year=2024")
     assert archivo.exists(), f"Caché no creada: {archivo}"
     print(f"OK — {len(data)} meetings, caché en {archivo}")
+
+    print("Self-check: año sin cobertura (2022) ...")
+    assert fetch_openf1("meetings", {"year": 2022}) == [], "2022 debería dar []"
+    print("OK — 2022 devuelve lista vacía sin excepción")
