@@ -1,6 +1,8 @@
-# Datos crudos (Bronze) — pesados, se regeneran con el DAG
-include/bronze/
-include/silver/
+# Datos generados (Bronze + Silver) — pesados, se regeneran con el DAG.
+# La carpeta frozen/ sí se versiona (contiene la semilla del repositorio),
+# pero el respaldo de la última corrida exitosa no: se regenera solo.
+include/output/
+include/frozen/ultimo_ok.csv
 
 # CLAUDE.md es instrucciones para Claude Code, no parte del proyecto
 CLAUDE.md

@@ -21,7 +21,7 @@ HEADERS = {"User-Agent": "utn-frm-ciencia-de-datos-proyecto-f1/1.0"}
 BRONZE_DIR = Path(
     os.environ.get(
         "F1_BRONZE_DIR",
-        Path(__file__).resolve().parents[2] / "include" / "bronze",
+        Path(__file__).resolve().parents[2] / "include" / "output" / "bronze",
     )
 )
 
@@ -31,9 +31,14 @@ def _cache_path(path: str) -> Path:
 
     Seguro porque la única query usada es ``?limit=100`` y es constante.
     """
-    # ponytail: se descarta el query para la clave; si algún día varía, hashear.
     limpio = path.lstrip("/").split("?", 1)[0]
-    return BRONZE_DIR / "jolpica" / limpio
+    parts = limpio.split("/")
+    if len(parts) == 3 and parts[2] in ["results.json", "driverStandings.json"]:
+        return BRONZE_DIR / "source=jolpica" / f"year={parts[0]}" / f"round={parts[1]}" / parts[2]
+    elif len(parts) == 1 and parts[0].endswith(".json"):
+        year = parts[0].replace(".json", "")
+        return BRONZE_DIR / "source=jolpica" / f"year={year}" / "data.json"
+    return BRONZE_DIR / "source=jolpica" / limpio
 
 
 def fetch_json(path: str, retries: int = 5, backoff: float = 2.0) -> dict:

@@ -22,28 +22,33 @@ Pipeline de datos de Fórmula 1 para predecir, **antes del inicio de cada carrer
 API (Jolpica / FastF1 / OpenF1)
         │
         ▼
-   include/bronze/       ← datos crudos (JSON/CSV), particionados por fuente y season/round
+  include/output/bronze/    ← datos crudos (JSON/CSV), particionados (source=X/year=Y/round=Z)
         │
-        ▼  (próxima iteración)
-   include/silver/        ← dataset construido, CSV
+        ▼
+  include/output/silver/    ← dataset construido, CSV fechado (ej: driver_race_features_2026-09-03.csv)
 ```
 
-El DAG de Airflow (`dags/f1_ingest.py`) orquesta la ingesta Bronze.
+El DAG de Airflow (`dags/f1_ingest.py`) orquesta el pipeline completo siguiendo el modelo medallón:
+- **Bronze**: `ingest_jolpica`, `ingest_openf1`, `ingest_fastf1` → `verificar_bronze`
+- **Silver**: `build_silver_race`, `build_silver_laps` → `validate_silver_race`, `validate_silver_laps`
 
 ## Estructura del repositorio
 
 ```
 ├── dags/
-│   └── f1_ingest.py              # DAG Airflow — ingesta Bronze
+│   └── f1_ingest.py              # DAG Airflow — pipeline completo Bronze + Silver
 ├── include/
 │   ├── f1/
 │   │   ├── __init__.py
 │   │   ├── jolpica.py            # Cliente Jolpica con caché + 429
 │   │   ├── openf1.py             # Cliente OpenF1 con caché + 429
 │   │   ├── fastf1_source.py      # Ingesta FastF1 (caché nativo)
-│   │   └── bronze.py             # Orquestador de prefetch
-│   └── bronze/                   # Datos crudos (gitignored)
-├── proyecto_f1_colab.ipynb       # Prototipo original en Colab
+│   │   ├── bronze.py             # Orquestador de prefetch Bronze
+│   │   └── silver_builder.py     # Construcción y validación de la capa Silver
+│   └── output/                   # Datos generados (gitignored)
+│       ├── bronze/               # Datos crudos particionados por fuente/año/ronda
+│       └── silver/               # Datasets CSV fechados
+├── include/frozen/               # Respaldo frío del último Silver exitoso
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -81,7 +86,7 @@ Probá que el cliente Jolpica baja y cachea correctamente:
 python include/f1/jolpica.py
 ```
 
-Debería imprimir `OK — caché funciona: include/bronze/jolpica/2024.json`.
+Debería imprimir `OK — caché funciona: include/output/bronze/source=jolpica/...`.
 
 ### 4. Configurar Airflow
 
@@ -102,12 +107,6 @@ Asegurate de que los volúmenes monten:
 
 Y que `include/` sea un **volumen persistente** (si no, la caché Bronze se pierde al recrear el contenedor).
 
-Instalar las dependencias dentro del contenedor:
-
-```bash
-docker exec -it <airflow-worker> pip install -r /opt/airflow/requirements.txt
-```
-
 ### 5. Ejecutar el pipeline
 
 Desde la UI de Airflow:
@@ -115,6 +114,7 @@ Desde la UI de Airflow:
 1. Buscar el DAG **`f1_ingest`**.
 2. Activarlo (toggle ON).
 3. Disparar manualmente (botón "Trigger DAG").
+4. Opcional: en la pantalla de trigger, elegir **modo `subset`** para una corrida rápida (solo 2024, ~minutos) o **`full`** para todo el histórico.
 
 O desde la terminal:
 
@@ -126,26 +126,29 @@ airflow dags trigger f1_ingest
 
 - En la UI de Airflow, todas las tareas deben terminar en **SUCCESS** (verde).
 - La tarea `verificar_bronze` loguea la cobertura de archivos por fuente.
-- En disco, `include/bronze/` debe tener subcarpetas `jolpica/`, `openf1/`, `fastf1/`, `fastf1_cache/`.
+- En disco, `include/output/bronze/` debe tener subcarpetas `source=jolpica/`, `source=openf1/`, `source=fastf1/`.
+- En disco, `include/output/silver/` debe tener los CSV fechados: `driver_race_features_YYYY-MM-DD.csv`.
 
 ### 7. Reejecución
 
-Disparar el DAG de nuevo es seguro: **no vuelve a descargar** lo que ya está en `include/bronze/`. Solo baja lo faltante. Una corrida interrumpida puede continuarse sin perder trabajo.
+Disparar el DAG de nuevo es seguro: **no vuelve a descargar** lo que ya está en `include/output/bronze/`. Solo baja lo faltante. Una corrida interrumpida puede continuarse sin perder trabajo.
 
 ## Variables de entorno (opcionales)
 
 | Variable | Descripción | Default |
 |---|---|---|
-| `F1_BRONZE_DIR` | Ruta donde se guardan los datos crudos | `include/bronze/` (relativo al repo) |
+| `F1_BRONZE_DIR` | Ruta donde se guardan los datos crudos | `include/output/bronze/` (relativo al repo) |
+| `F1_SILVER_DIR` | Ruta donde se guardan los datasets Silver | `include/output/silver/` (relativo al repo) |
+
+## Parámetros del DAG (en la UI de Airflow)
+
+| Parámetro | Valores | Descripción |
+|---|---|---|
+| `mode` | `full` (default) / `subset` | `subset` procesa solo 2024 para validar rápido |
+| `force` | `false` (default) / `true` | Fuerza re-descarga ignorando la caché en Bronze |
 
 ## Notas para la entrega
 
 - **NO** depender de ejecutar una descarga completa en vivo durante la presentación. La corrida debe estar hecha previamente.
 - Cada integrante debe poder explicar qué hace cada tarea del DAG.
 - El notebook `proyecto_f1_colab.ipynb` contiene la lógica original probada y el chequeo de calidad (`chequear_calidad`).
-
-## Próximos pasos (Silver)
-
-- Migrar `resultados_a_filas`, `driver_standings_before` y rolling features a `include/f1/transform.py` y `include/f1/features.py`.
-- Agregar tarea al DAG que construya el dataset desde Bronze y exporte a `include/silver/dataset.csv`.
-- Gate de calidad automatizado en el DAG.

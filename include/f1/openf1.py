@@ -19,7 +19,7 @@ HEADERS = {"User-Agent": "utn-frm-ciencia-de-datos-proyecto-f1/1.0"}
 BRONZE_DIR = Path(
     os.environ.get(
         "F1_BRONZE_DIR",
-        Path(__file__).resolve().parents[2] / "include" / "bronze",
+        Path(__file__).resolve().parents[2] / "include" / "output" / "bronze",
     )
 )
 
@@ -34,7 +34,7 @@ YEARS = list(range(2023, 2027))  # 2023–2026
 
 def _cache_path(endpoint: str, params_key: str) -> Path:
     """Ruta de caché: ``bronze/openf1/{endpoint}/{params_key}.json``."""
-    return BRONZE_DIR / "openf1" / endpoint / f"{params_key}.json"
+    return BRONZE_DIR / "source=openf1" / f"endpoint={endpoint}" / f"params={params_key}.json"
 
 
 def _params_to_key(params: dict) -> str:

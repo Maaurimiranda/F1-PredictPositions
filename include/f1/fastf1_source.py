@@ -18,7 +18,7 @@ from pathlib import Path
 BRONZE_DIR = Path(
     os.environ.get(
         "F1_BRONZE_DIR",
-        Path(__file__).resolve().parents[2] / "include" / "bronze",
+        Path(__file__).resolve().parents[2] / "include" / "output" / "bronze",
     )
 )
 
@@ -44,7 +44,7 @@ def _dump_session(year: int, round_num: int, session_type: str):
     """
     import fastf1
 
-    out_dir = BRONZE_DIR / "fastf1" / str(year) / str(round_num) / session_type
+    out_dir = BRONZE_DIR / "source=fastf1" / f"year={year}" / f"round={round_num}" / f"session={session_type}"
     results_path = out_dir / "results.csv"
     laps_path = out_dir / "laps.csv"
 
@@ -110,6 +110,6 @@ if __name__ == "__main__":
     print("Self-check: cargando 2024 R1 Race ...")
     _ensure_cache()
     _dump_session(2024, 1, "R")
-    r = BRONZE_DIR / "fastf1" / "2024" / "1" / "R" / "results.csv"
+    r = BRONZE_DIR / "source=fastf1" / "year=2024" / "round=1" / "session=R" / "results.csv"
     assert r.exists(), f"No se creó {r}"
     print(f"OK — {r}")

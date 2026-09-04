@@ -20,15 +20,20 @@ resultado de esa misma carrera. Ver LEAKY_COLS al final del archivo.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
 import pandas as pd
 
+from f1 import schema
+
+log = logging.getLogger(__name__)
+
 BRONZE = Path(
     os.environ.get(
         "F1_BRONZE_DIR",
-        Path(__file__).resolve().parents[2] / "include" / "bronze",
+        Path(__file__).resolve().parents[2] / "include" / "output" / "bronze",
     )
 )
 SILVER = Path(os.environ.get("F1_SILVER_DIR", BRONZE.parent / "silver"))
@@ -41,7 +46,7 @@ def _safe_json_load(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
-        print(f"  aviso: no se pudo leer {path}: {e}")
+        log.warning("No se pudo leer %s: %s", path, e)
         return None
 
 
@@ -103,12 +108,12 @@ def _safe_merge(left: pd.DataFrame, right: pd.DataFrame,
                 on: list[str], label: str) -> pd.DataFrame:
     """Merge left que garantiza no duplicar filas ni perderlas."""
     if right is None or right.empty:
-        print(f"  [{label}] vacío — merge omitido")
+        log.warning("[%s] vacío — merge omitido", label)
         return left
 
     faltantes = [c for c in on if c not in right.columns]
     if faltantes:
-        print(f"  [{label}] sin columnas {faltantes} — merge omitido")
+        log.warning("[%s] sin columnas %s — merge omitido", label, faltantes)
         return left
 
     left = _align_keys(left, on)
@@ -131,7 +136,7 @@ def _safe_merge(left: pd.DataFrame, right: pd.DataFrame,
     nuevas = [c for c in right.columns if c not in on]
     if nuevas:
         cob = (1 - out[nuevas].isna().mean().mean()) * 100
-        print(f"  [{label}] {cob:.1f}% de cobertura sobre {len(out)} filas")
+        log.info("[%s] %.1f%% de cobertura sobre %s filas", label, cob, len(out))
     return out
 
 
@@ -148,9 +153,9 @@ JOLPICA_COLS = [
 
 def load_jolpica_results() -> pd.DataFrame:
     rows = []
-    base = BRONZE / "jolpica"
+    base = BRONZE / "source=jolpica"
     if not base.exists():
-        print("  aviso: no existe bronze/jolpica")
+        log.warning("No existe bronze/source=jolpica")
         return _empty(JOLPICA_COLS)
 
     for p in sorted(base.rglob("results.json")):
@@ -208,12 +213,11 @@ def load_jolpica_results() -> pd.DataFrame:
     antes = len(df)
     df = df.drop_duplicates(subset=["season", "round", "driver_id"], keep="last")
     if len(df) != antes:
-        print(f"  jolpica: {antes - len(df)} duplicados descartados")
+        log.info("jolpica: %s duplicados descartados", antes - len(df))
 
     sin_code = int(df["driver_code"].isna().sum())
     if sin_code:
-        print(f"  aviso: {sin_code} filas de Jolpica sin driver_code "
-              "(no van a matchear con FastF1/OpenF1)")
+        log.warning("%s filas de Jolpica sin driver_code (no van a matchear con FastF1/OpenF1)", sin_code)
     return df
 
 
@@ -231,7 +235,7 @@ def load_jolpica_standings_after() -> pd.DataFrame:
     cols = ["season", "round", "driver_id", "standing_after", "points_after",
             "wins_after"]
     rows = []
-    base = BRONZE / "jolpica"
+    base = BRONZE / "source=jolpica"
     if not base.exists():
         return _empty(cols)
 
@@ -292,13 +296,20 @@ def build_standings_before() -> pd.DataFrame:
 # FastF1
 # =============================
 def _parse_fastf1_path(path: Path):
-    """.../fastf1/{year}/{round}/{session}/{archivo}.csv -> (year, round, ses)."""
+    """.../source=fastf1/year={year}/round={round}/session={session}/{archivo}.csv -> (year, round, ses)."""
     partes = path.parts
     if len(partes) < 4:
         return None
-    session = partes[-2]
-    rnd = _to_int(partes[-3])
-    season = _to_int(partes[-4])
+    session_part = partes[-2]
+    rnd_part = partes[-3]
+    season_part = partes[-4]
+    
+    if not (session_part.startswith("session=") and rnd_part.startswith("round=") and season_part.startswith("year=")):
+        return None
+        
+    session = session_part.split("=")[1]
+    rnd = _to_int(rnd_part.split("=")[1])
+    season = _to_int(season_part.split("=")[1])
     if season is None or rnd is None or not (1950 < season < 2100) or rnd < 1:
         return None
     return season, rnd, session
@@ -306,9 +317,9 @@ def _parse_fastf1_path(path: Path):
 
 def _leer_fastf1(nombre: str, session: str) -> list[tuple[int, int, pd.DataFrame]]:
     """Lee todos los `nombre` de la sesión `session` ('Q' o 'R')."""
-    base = BRONZE / "fastf1"
+    base = BRONZE / "source=fastf1"
     if not base.exists():
-        print("  aviso: no existe bronze/fastf1")
+        log.warning("No existe bronze/source=fastf1")
         return []
 
     salida, malas = [], 0
@@ -323,13 +334,13 @@ def _leer_fastf1(nombre: str, session: str) -> list[tuple[int, int, pd.DataFrame
         try:
             raw = pd.read_csv(f)
         except Exception as e:
-            print(f"  aviso: no se pudo leer {f}: {e}")
+            log.warning("No se pudo leer %s: %s", f, e)
             continue
         if not raw.empty:
             salida.append((season, rnd, raw))
 
     if malas:
-        print(f"  aviso: {malas} archivo(s) {nombre} con ruta no parseable")
+        log.warning("%s archivo(s) %s con ruta no parseable", malas, nombre)
     return salida
 
 
@@ -352,7 +363,7 @@ def load_fastf1_driver_map() -> pd.DataFrame:
             }))
 
     if not frames:
-        print("  aviso: sin mapa de números — pit/stints van a quedar vacíos")
+        log.warning("Sin mapa de números FastF1 — pit/stints van a quedar vacíos")
         return _empty(cols)
 
     df = pd.concat(frames, ignore_index=True).dropna(
@@ -469,7 +480,7 @@ def build_race_pace(laps: pd.DataFrame) -> pd.DataFrame:
 # OpenF1
 # =============================
 def _openf1_concat(endpoint: str) -> pd.DataFrame:
-    d = BRONZE / "openf1" / endpoint
+    d = BRONZE / "source=openf1" / f"endpoint={endpoint}"
     if not d.exists():
         return pd.DataFrame()
     frames = []
@@ -489,7 +500,7 @@ def load_openf1_session_index(calendario: pd.DataFrame) -> pd.DataFrame:
     cols = ["session_key", "season", "round"]
     df = _openf1_concat("sessions")
     if df.empty or "session_name" not in df.columns:
-        print("  aviso: sin índice de sesiones de OpenF1")
+        log.warning("Sin índice de sesiones de OpenF1")
         return _empty(cols)
 
     # session_type "Race" también marca los Sprint: filtramos por nombre.
@@ -505,7 +516,7 @@ def load_openf1_session_index(calendario: pd.DataFrame) -> pd.DataFrame:
     races["race_date"] = races["date_start"].dt.date
 
     if calendario.empty:
-        print("  aviso: sin calendario de Jolpica, se usa orden por fecha")
+        log.warning("Sin calendario de Jolpica, se usa orden por fecha para OpenF1")
         races["round"] = (races.groupby("season")["date_start"]
                           .rank(method="first").astype(int))
         return races[cols]
@@ -516,15 +527,13 @@ def load_openf1_session_index(calendario: pd.DataFrame) -> pd.DataFrame:
 
     sin_match = out["round"].isna()
     if sin_match.any():
-        # Fallback: orden por fecha dentro del año.
         rank = (out.groupby("season")["date_start"].rank(method="first"))
         out.loc[sin_match, "round"] = rank[sin_match]
-        print(f"  openf1: {int(sin_match.sum())} sesión(es) sin fecha "
-              "coincidente en Jolpica, resueltas por orden")
+        log.warning("openf1: %s sesión(es) sin fecha coincidente en Jolpica, resueltas por orden", int(sin_match.sum()))
 
     out["round"] = pd.to_numeric(out["round"], errors="coerce").astype("Int64")
     out = out.dropna(subset=["round"]).drop_duplicates(subset=["session_key"])
-    print(f"  openf1: {len(out)} sesiones de carrera mapeadas a (season, round)")
+    log.info("openf1: %s sesiones de carrera mapeadas a (season, round)", len(out))
     return out[cols]
 
 
@@ -642,59 +651,35 @@ def validate_silver_dataset(df: pd.DataFrame, key_cols: list[str],
             raise ValueError(f"La columna obligatoria '{c}' está 100% vacía.")
 
     cobertura = ((1 - df.isna().mean()) * 100).sort_values()
-    print("\n  Cobertura por columna (10 peores):")
-    print(cobertura.head(10).round(1).to_string().replace("\n", "\n    "))
+    log.info("Cobertura por columna (10 peores):\n%s", cobertura.head(10).round(1).to_string())
 
     vacias = [c for c in df.columns if df[c].isna().all()]
     if vacias:
-        print(f"\n  ATENCIÓN: columnas 100% vacías -> {vacias}")
+        log.warning("ATENCIÓN: columnas 100%% vacías -> %s", vacias)
     return df
 
 
 # =============================
 # Silver A: piloto-carrera
 # =============================
-RACE_COL_ORDER = [
-    "season", "round", "race_date", "race_name", "circuit_id", "circuit_name",
-    "driver_id", "driver_code", "driver_name",
-    "constructor_id", "constructor_name", "team_name",
-    "grid_position", "grid_position_ff1", "pit_lane_start",
-    "quali_position", "q1_s", "q2_s", "q3_s", "quali_best_s",
-    "driver_standing_before", "driver_points_before", "driver_wins_before",
-    "air_temp", "track_temp", "humidity", "pressure", "wind_speed",
-    "rainfall_max",
-    "finish_position", "classified", "points", "status",
-    "laps_completed", "laps_completed_jolpica",
-    "avg_lap_time_s", "median_lap_time_s", "best_lap_time_s", "std_lap_time_s",
-    "pit_count", "pit_duration_mean", "pit_duration_min",
-    "stint_count", "compounds_used", "tyre_age_start_mean",
-    "tyre_change_count",
-]
-
-# Columnas que describen lo ocurrido DURANTE la carrera. No usar como
-# features para predecir el resultado de esa misma carrera.
-LEAKY_COLS = [
-    "finish_position", "classified", "points", "status",
-    "laps_completed", "laps_completed_jolpica",
-    "avg_lap_time_s", "median_lap_time_s", "best_lap_time_s", "std_lap_time_s",
-    "pit_count", "pit_duration_mean", "pit_duration_min",
-    "stint_count", "compounds_used", "tyre_age_start_mean", "tyre_change_count",
-]
+# Importados desde schema.py — el único lugar donde viven estas listas.
+RACE_COL_ORDER = schema.RACE_COLUMNS
+LEAKY_COLS = schema.LEAKY_COLS
 
 
-def build_driver_race_features() -> pd.DataFrame:
-    print("== Silver A: driver_race_features ==")
+def build_driver_race_features(date_suffix: str = "") -> str:
+    log.info("== Silver A: driver_race_features ==")
     SILVER.mkdir(parents=True, exist_ok=True)
 
     df = load_jolpica_results()
     if df.empty:
         raise ValueError("No hay resultados de Jolpica en Bronze.")
-    print(f"  base jolpica: {len(df)} filas")
+    log.info("base jolpica: %s filas", len(df))
 
     calendario = load_calendario(df)
     sessions = load_openf1_session_index(calendario)
     dmap = load_fastf1_driver_map()
-    print(f"  mapa de números: {len(dmap)} combinaciones (season, round, nro)")
+    log.info("mapa de números: %s combinaciones (season, round, nro)", len(dmap))
 
     df = _safe_merge(df, build_standings_before(),
                      ["season", "round", "driver_id"], "standings_before")
@@ -718,37 +703,27 @@ def build_driver_race_features() -> pd.DataFrame:
     resto = [c for c in df.columns if c not in orden]
     df = df[orden + resto].sort_values(["season", "round", "finish_position"])
 
-    validate_silver_dataset(
-        df, key_cols=["season", "round", "driver_id"], min_rows=1000,
-        required_non_null=["season", "round", "driver_id", "finish_position"])
-
-    destino = SILVER / "driver_race_features.csv"
+    filename = f"driver_race_features_{date_suffix}.csv" if date_suffix else "driver_race_features.csv"
+    destino = SILVER / filename
     df.to_csv(destino, index=False)
-    print(f"\n  OK -> {destino} ({len(df)} filas, {df.shape[1]} columnas)")
-    return df
+    log.info("OK -> %s (%s filas, %s columnas)", destino, len(df), df.shape[1])
+    return str(destino)
 
 
 # =============================
 # Silver B: piloto-vuelta-carrera
 # =============================
-LAP_COL_ORDER = [
-    "season", "round", "race_name", "driver_id", "driver_code", "driver_name",
-    "constructor_name", "lap_number", "lap_time_s",
-    "sector_1_s", "sector_2_s", "sector_3_s",
-    "compound", "tyre_life", "fresh_tyre", "is_personal_best", "lap_position",
-    "grid_position", "finish_position",
-    "air_temp", "track_temp", "humidity", "rainfall_max", "pit_count",
-]
+LAP_COL_ORDER = schema.LAP_COLUMNS
 
 
-def build_driver_lap_features() -> pd.DataFrame:
-    print("\n== Silver B: driver_lap_features ==")
+def build_driver_lap_features(date_suffix: str = "") -> str:
+    log.info("== Silver B: driver_lap_features ==")
     SILVER.mkdir(parents=True, exist_ok=True)
 
     df = load_fastf1_laps("R")
     if df.empty:
         raise ValueError("No hay vueltas de carrera de FastF1 en Bronze.")
-    print(f"  base fastf1 laps: {len(df)} filas")
+    log.info("base fastf1 laps: %s filas", len(df))
     df = df.drop(columns=["driver_number"], errors="ignore")
 
     resultados = load_jolpica_results()
@@ -775,23 +750,15 @@ def build_driver_lap_features() -> pd.DataFrame:
     df = df[orden + resto].sort_values(
         ["season", "round", "driver_code", "lap_number"])
 
-    validate_silver_dataset(
-        df, key_cols=["season", "round", "driver_code", "lap_number"],
-        min_rows=1000,
-        required_non_null=["season", "round", "driver_code", "lap_number",
-                           "lap_time_s"])
-
-    destino = SILVER / "driver_lap_features.csv"
+    filename = f"driver_lap_features_{date_suffix}.csv" if date_suffix else "driver_lap_features.csv"
+    destino = SILVER / filename
     df.to_csv(destino, index=False)
-    print(f"\n  OK -> {destino} ({len(df)} filas, {df.shape[1]} columnas)")
-    return df
+    log.info("OK -> %s (%s filas, %s columnas)", destino, len(df), df.shape[1])
+    return str(destino)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     build_driver_race_features()
     build_driver_lap_features()
-    print("\n" + "=" * 60)
-    print("RECORDATORIO — columnas post-carrera (no usar como features "
-          "para predecir el resultado de esa misma carrera):")
-    print("  " + ", ".join(LEAKY_COLS))
-    print("=" * 60)
+    log.info("RECORDATORIO: columnas post-carrera (no usar como features para predecir): %s", ", ".join(LEAKY_COLS))
