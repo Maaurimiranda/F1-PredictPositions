@@ -1,0 +1,9 @@
+{
+  "include": ["dags", "include", "plugins", "tests"],
+  "extraPaths": ["include"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none",
+  "ignore": ["**/__pycache__"],
+  "stubPath": "typestubs"
+}

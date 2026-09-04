@@ -1,0 +1,12 @@
+# Pyrefly configuration — F1-PredictPositions
+# Este proyecto corre dentro de Docker (Astro/Airflow).
+# pendulum y airflow son paquetes del contenedor, no del intérprete local.
+# Los módulos f1.* viven en include/f1/, que se monta en el Python path del contenedor.
+
+project-includes = ["dags", "include", "plugins", "tests"]
+search-path = ["include"]
+
+[errors]
+# pendulum, airflow.sdk y demás paquetes del contenedor no existen en el
+# intérprete local de Windows — suprimir el error de import faltante.
+missing-import = false
