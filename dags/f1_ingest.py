@@ -10,8 +10,9 @@ antes del inicio de cada carrera, siguiendo el modelo medallón en dos capas.
   crudos tal como los devuelven las APIs, guardados en disco y particionados
   por fuente/año/ronda. Es el único bloque que toca la red. No interpreta nada.
 
-* **Silver** (`build_silver_race`, `build_silver_laps`) — filas tipadas, una
-  por piloto por carrera, deduplicadas. No toca la red: lee del bronce.
+* **Silver** (`build_silver_race`, `build_silver_laps`, `build_unified_silver`) —
+  tablas tipadas y deduplicadas. No toca la red: lee del bronce y enriquece
+  las vueltas con toda la información disponible a nivel de carrera.
 
 La separación no es decorativa. Si aparece un bug en el parseo, se corrige
 Silver y se reprocesa el bronce que ya está en disco, sin volver a llamar a
@@ -168,18 +169,98 @@ def f1_ingest():
         return "Validación Race: OK"
 
     @task
-    def validate_silver_laps(ruta: str) -> str:
+    def validate_silver_laps(ruta: str, **context) -> str:
         import pandas as pd
         from f1.silver_builder import validate_silver_dataset
-        log.info("Validando Silver lap features desde %s", ruta)
+        mode = context["params"].get("mode", "full")
+        min_rows = 10000 if mode == "subset" else 20000
+        log.info("Validando Silver lap features desde %s (modo %s, min_rows=%s)", ruta, mode, min_rows)
         df = pd.read_csv(ruta)
         validate_silver_dataset(
             df, key_cols=["season", "round", "driver_code", "lap_number"],
-            min_rows=1000,
+            min_rows=min_rows,
             required_non_null=["season", "round", "driver_code", "lap_number", "lap_time_s"]
         )
         log.info("Validación lap features OK: %s filas x %s columnas", len(df), df.shape[1])
         return "Validación Laps: OK"
+
+    @task
+    def build_unified_silver(race_path: str, laps_path: str, **context) -> str:
+        from f1.silver_builder import build_unified_lap_race_features
+        dag_run = context["dag_run"]
+        momento = dag_run.logical_date or dag_run.run_after
+        ds = momento.date().isoformat()
+        log.info("Construyendo Silver unificado (laps + race) con sufijo %s", ds)
+        ruta = build_unified_lap_race_features(race_path, laps_path, date_suffix=ds)
+        log.info("Silver unificado escrito en %s", ruta)
+        return ruta
+
+    @task
+    def validate_unified_silver(ruta: str, **context) -> str:
+        import pandas as pd
+        mode = context["params"].get("mode", "full")
+        log.info("Validando Silver unificado desde %s (modo %s)", ruta, mode)
+        df = pd.read_csv(ruta)
+
+        # 1. Clave sin duplicados (Test operativo de la unidad de análisis)
+        key_cols = ["season", "round", "driver_code", "lap_number"]
+        faltantes = [c for c in key_cols if c not in df.columns]
+        if faltantes:
+            raise ValueError(f"Faltan columnas de la clave primaria: {faltantes}")
+        
+        is_key_unique = df.set_index(key_cols).index.is_unique
+        if not is_key_unique:
+            dup_count = int(df.duplicated(subset=key_cols).sum())
+            raise ValueError(
+                f"Clave primaria duplicada sobre {key_cols}: {dup_count} filas repetidas. "
+                "La unidad de análisis está comprometida o el pipeline duplica registros."
+            )
+        log.info("1. Clave sin duplicados OK sobre %s: is_unique=True", key_cols)
+
+        # 2. Volumen suficiente (> 1.000 filas)
+        min_rows = 1000
+        n_rows = len(df)
+        if n_rows <= min_rows:
+            raise ValueError(f"Volumen insuficiente: {n_rows} filas (se esperaban más de {min_rows}).")
+        log.info("2. Volumen suficiente OK: %s filas (> %s)", n_rows, min_rows)
+
+        # 3. Ancho suficiente (5 o más columnas útiles)
+        n_cols = df.shape[1]
+        if n_cols < 5:
+            raise ValueError(f"Ancho insuficiente: {n_cols} columnas (se esperaban 5 o más).")
+        log.info("3. Ancho suficiente OK: shape=%s (%s columnas)", df.shape, n_cols)
+
+        # 4. Mezcla de tipos (numéricas, categóricas y fechas)
+        type_counts = df.dtypes.value_counts()
+        log.info("4. Mezcla de tipos de datos:\n%s", type_counts.to_string())
+        numeric_cols = df.select_dtypes(include=["number"]).columns
+        categorical_cols = df.select_dtypes(include=["object", "category"]).columns
+        date_candidates = [c for c in df.columns if "date" in c.lower()]
+        if len(numeric_cols) == 0:
+            raise ValueError("No se encontraron columnas numéricas en el dataset.")
+        if len(categorical_cols) == 0:
+            raise ValueError("No se encontraron columnas categóricas en el dataset.")
+        if len(date_candidates) == 0:
+            log.warning("No se identificaron columnas con nombre de fecha ('date').")
+
+        # 5. Nulos conocidos (saber cuáles y por qué)
+        null_series = df.isna().mean().sort_values(ascending=False)
+        top_nulls = null_series[null_series > 0]
+        log.info(
+            "5. Nulos conocidos (porcentaje descendente):\n%s",
+            top_nulls.round(4).to_string() if not top_nulls.empty else "Sin valores nulos."
+        )
+
+        # 6. Sin columnas vacías (ninguna al 100 % de nulos)
+        empty_cols = df.columns[df.isna().all()].tolist()
+        if empty_cols:
+            raise ValueError(
+                f"Columnas 100%% vacías detectadas en Silver unificado: {empty_cols}"
+            )
+        log.info("6. Sin columnas vacías OK: ninguna columna al 100%% de nulos.")
+
+        log.info("Validación completa Silver unificado EXITOSA: %s filas x %s columnas", n_rows, n_cols)
+        return "Validación Silver Unificado: OK"
 
     @task
     def get_seasons_jolpica(**context) -> list[int]:
@@ -219,8 +300,14 @@ def f1_ingest():
     laps_path = build_silver_laps()
 
     v_bronze >> [race_path, laps_path]
-    validate_silver_race(race_path)
-    validate_silver_laps(laps_path)
+
+    val_race = validate_silver_race(race_path)
+    val_laps = validate_silver_laps(laps_path)
+
+    unified_path = build_unified_silver(race_path, laps_path)
+    [val_race, val_laps] >> unified_path
+
+    validate_unified_silver(unified_path)
 
 
 f1_ingest()

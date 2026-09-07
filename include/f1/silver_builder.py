@@ -589,6 +589,13 @@ def _a_piloto(agg: pd.DataFrame, sessions: pd.DataFrame,
 
 
 def load_openf1_pits(sessions, dmap) -> pd.DataFrame:
+    """Extrae paradas en pits por piloto y carrera desde OpenF1.
+
+    Nota de cobertura:
+        OpenF1 no dispone de telemetría de pits para las rondas 1 a 6 de 2023
+        (la API retorna 404), generando valores nulos en esas carreras.
+        A partir de la ronda 7 de 2023 la cobertura es completa.
+    """
     cols = ["season", "round", "driver_code", "pit_count",
             "pit_duration_mean", "pit_duration_min"]
     df = _openf1_concat("pit")
@@ -757,8 +764,58 @@ def build_driver_lap_features(date_suffix: str = "") -> str:
     return str(destino)
 
 
+# =============================
+# Silver C: vueltas enriquecidas con contexto de carrera (1 a N)
+# =============================
+UNIFIED_LAP_RACE_COL_ORDER = schema.UNIFIED_LAP_RACE_COLUMNS
+
+
+def build_unified_lap_race_features(race_path: str, laps_path: str,
+                                   date_suffix: str = "") -> str:
+    """Enriquece cada vuelta con toda la información de carrera (1 a N).
+
+    Combina Silver Laps y Silver Race sin reducir columnas, agregando el
+    contexto completo del piloto y la carrera a cada vuelta individual.
+    """
+    log.info("== Silver C: unified_lap_race_features ==")
+    SILVER.mkdir(parents=True, exist_ok=True)
+
+    df_race = pd.read_csv(race_path)
+    df_laps = pd.read_csv(laps_path)
+
+    if df_race.empty:
+        raise ValueError("El archivo Silver Race está vacío.")
+    if df_laps.empty:
+        raise ValueError("El archivo Silver Laps está vacío.")
+
+    keys = ["season", "round", "driver_code"]
+
+    # Agregar todas las columnas de carrera no redundantes
+    cols_to_add = [c for c in df_race.columns if c not in df_laps.columns or c in keys]
+    df_race_subset = df_race[cols_to_add].drop_duplicates(subset=keys)
+
+    df_unified = _safe_merge(df_laps, df_race_subset, keys, "silver_race_context")
+
+    orden = [c for c in UNIFIED_LAP_RACE_COL_ORDER if c in df_unified.columns]
+    resto = [c for c in df_unified.columns if c not in orden]
+    df_unified = df_unified[orden + resto].sort_values(
+        ["season", "round", "driver_code", "lap_number"]
+    )
+
+    filename = (
+        f"driver_lap_race_features_{date_suffix}.csv"
+        if date_suffix
+        else "driver_lap_race_features.csv"
+    )
+    destino = SILVER / filename
+    df_unified.to_csv(destino, index=False)
+    log.info("OK -> %s (%s filas, %s columnas)", destino, len(df_unified), df_unified.shape[1])
+    return str(destino)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    build_driver_race_features()
-    build_driver_lap_features()
+    r_path = build_driver_race_features()
+    l_path = build_driver_lap_features()
+    build_unified_lap_race_features(r_path, l_path)
     log.info("RECORDATORIO: columnas post-carrera (no usar como features para predecir): %s", ", ".join(LEAKY_COLS))

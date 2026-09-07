@@ -1,7 +1,10 @@
 """
 Cliente de OpenF1 (api.openf1.org) con caché en disco y manejo de 429.
 
-Cobertura: solo desde 2023.
+Cobertura:
+  - weather, sessions, meetings: 2023 en adelante (completo).
+  - pit / stints: 2023 desde Ronda 7 (GP de España, session_key=9102) en adelante.
+    Nota: Las rondas 1 a 6 de 2023 devuelven 404 por falta de registro upstream en la API.
 Endpoints: meetings, sessions, weather, pit, stints, position (para
 starting_grid y session results que apliquen).
 """

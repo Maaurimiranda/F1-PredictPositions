@@ -16,6 +16,18 @@ Pipeline de datos de Fórmula 1 para predecir, **antes del inicio de cada carrer
 | [FastF1](https://docs.fastf1.dev/) | 2018+ | Qualifying detallado, laps, tiempos por sector |
 | [OpenF1](https://openf1.org/) | 2023+ | Clima, pits, stints |
 
+### Cobertura y Limitaciones Conocidas de los Datos
+
+- **OpenF1 (`pit_count` en 2023):**
+  - La API de OpenF1 comenzó a registrar el endpoint `/v1/pit` a partir del **Gran Premio de España 2023 (Ronda 7, `session_key=9102`)**.
+  - Las **primeras 6 rondas de 2023** (Bahrain, Arabia Saudita, Australia, Azerbaiyán, Miami y Mónaco) devuelven `404 Not Found` en la API pública por falta de telemetría de pits upstream, produciendo valores nulos (`NaN`) en `pit_count` para esas carreras (~27.5% de las vueltas de 2023). A partir de la ronda 7 y en las temporadas 2024+, la cobertura de pits es completa.
+- **Tiempos de Vuelta y Sectores (`sector_1_s`, `lap_time_s`):**
+  - Presentan valores nulos estructurales típicos del cronometraje de carreras (~1% a 2%):
+    - `sector_1_s` es nulo en la **vuelta 1** de cada carrera debido a la largada detenida desde el cajón de salida (no existe registro de sector lanzado).
+    - `lap_time_s` es nulo en la vuelta en la cual un piloto entra a boxes y **abandona la carrera** (vuelta incompleta).
+- **Temporada 2022:**
+  - FastF1 y Jolpica aportan telemetría de vueltas y resultados completos; las columnas dependientes de OpenF1 (`air_temp`, `track_temp`, `pit_count`, etc.) son nulas ya que OpenF1 solo tiene soporte a partir de 2023.
+
 ## Arquitectura
 
 ```
