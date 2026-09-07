@@ -6,6 +6,7 @@ Endpoints: meetings, sessions, weather, pit, stints, position (para
 starting_grid y session results que apliquen).
 """
 
+import datetime
 import json
 import os
 import time
@@ -126,10 +127,20 @@ def prefetch_openf1(year: int) -> dict:
         if s.get("session_type") == "Race" and s.get("session_key")
     ]
 
+    today = datetime.date.today()
     bajadas = 0
     errores = 0
 
     for s in race_sessions:
+        # Omitir si la sesión es posterior a la fecha actual.
+        date_start = s.get("date_start")
+        if date_start:
+            try:
+                if datetime.date.fromisoformat(date_start[:10]) > today:
+                    continue
+            except ValueError:
+                pass
+
         session_key = s["session_key"]
         for endpoint in SESSION_ENDPOINTS:
             try:

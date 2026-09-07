@@ -80,7 +80,7 @@ _SUBSET_SEASON = 2024
 )
 def f1_ingest():
 
-    @task(map_index_template="Temporada {{ task.op_args[0] }}")
+    @task(map_index_template="Temporada {{ task.op_kwargs['season'] }}")
     def ingest_jolpica(season: int) -> dict:
         from f1.bronze import prefetch_jolpica
         log.info("Iniciando ingesta Jolpica para temporada %s", season)
@@ -88,7 +88,7 @@ def f1_ingest():
         log.info("Jolpica %s: %s rondas, %s errores", season, result.get("rondas"), result.get("errores"))
         return result
 
-    @task(map_index_template="Año {{ task.op_args[0] }}")
+    @task(map_index_template="Año {{ task.op_kwargs['year'] }}")
     def ingest_openf1(year: int) -> dict:
         from f1.openf1 import prefetch_openf1
         log.info("Iniciando ingesta OpenF1 para año %s", year)
@@ -99,7 +99,7 @@ def f1_ingest():
             log.info("OpenF1 %s: %s sesiones bajadas, %s errores", year, result.get("sessions_bajadas"), result.get("errores"))
         return result
 
-    @task(map_index_template="Año {{ task.op_args[0] }}")
+    @task(map_index_template="Año {{ task.op_kwargs['year'] }}")
     def ingest_fastf1(year: int) -> dict:
         from f1.fastf1_source import prefetch_fastf1
         log.info("Iniciando ingesta FastF1 para año %s", year)
@@ -153,13 +153,15 @@ def f1_ingest():
         return ruta
 
     @task
-    def validate_silver_race(ruta: str) -> str:
+    def validate_silver_race(ruta: str, **context) -> str:
         import pandas as pd
         from f1.silver_builder import validate_silver_dataset
-        log.info("Validando Silver race features desde %s", ruta)
+        mode = context["params"].get("mode", "full")
+        min_rows = 400 if mode == "subset" else 1000
+        log.info("Validando Silver race features desde %s (modo %s, min_rows=%s)", ruta, mode, min_rows)
         df = pd.read_csv(ruta)
         validate_silver_dataset(
-            df, key_cols=["season", "round", "driver_id"], min_rows=1000,
+            df, key_cols=["season", "round", "driver_id"], min_rows=min_rows,
             required_non_null=["season", "round", "driver_id", "finish_position"]
         )
         log.info("Validación race features OK: %s filas x %s columnas", len(df), df.shape[1])
@@ -179,13 +181,37 @@ def f1_ingest():
         log.info("Validación lap features OK: %s filas x %s columnas", len(df), df.shape[1])
         return "Validación Laps: OK"
 
+    @task
+    def get_seasons_jolpica(**context) -> list[int]:
+        mode = context["params"].get("mode", "full")
+        seasons = [_SUBSET_SEASON] if mode == "subset" else SEASONS_JOLPICA
+        log.info("Modo %s: temporadas Jolpica a procesar: %s", mode, seasons)
+        return seasons
+
+    @task
+    def get_years_openf1(**context) -> list[int]:
+        mode = context["params"].get("mode", "full")
+        years = [_SUBSET_SEASON] if mode == "subset" else YEARS_OPENF1
+        log.info("Modo %s: años OpenF1 a procesar: %s", mode, years)
+        return years
+
+    @task
+    def get_years_fastf1(**context) -> list[int]:
+        mode = context["params"].get("mode", "full")
+        years = [_SUBSET_SEASON] if mode == "subset" else YEARS_FASTF1
+        log.info("Modo %s: años FastF1 a procesar: %s", mode, years)
+        return years
+
     # --- Orquestación ---
     # El modo 'subset' restringe a una sola temporada para correr rápido.
     # El modo 'full' procesa todas las temporadas configuradas.
-    # Como el DAG corre a demanda (schedule=None), la fecha sale del DagRun.
-    jolpica = ingest_jolpica.expand(season=SEASONS_JOLPICA)
-    openf1 = ingest_openf1.expand(year=YEARS_OPENF1)
-    fastf1 = ingest_fastf1.expand(year=YEARS_FASTF1)
+    seasons_jolpica = get_seasons_jolpica()
+    years_openf1 = get_years_openf1()
+    years_fastf1 = get_years_fastf1()
+
+    jolpica = ingest_jolpica.expand(season=seasons_jolpica)
+    openf1 = ingest_openf1.expand(year=years_openf1)
+    fastf1 = ingest_fastf1.expand(year=years_fastf1)
 
     v_bronze = verificar_bronze(jolpica, openf1, fastf1)
 

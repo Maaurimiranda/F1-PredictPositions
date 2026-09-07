@@ -12,6 +12,7 @@ IMPORTANTE: este archivo NO se llama ``fastf1.py`` — ese nombre colisiona
 con ``import fastf1``.
 """
 
+import datetime
 import os
 from pathlib import Path
 
@@ -82,10 +83,12 @@ def prefetch_fastf1(year: int) -> dict:
 
     Retorna ``{rondas: int, errores: int}``.
     """
+    import pandas as pd
     import fastf1
 
     _ensure_cache()
     schedule = fastf1.get_event_schedule(year, include_testing=False)
+    today = datetime.date.today()
 
     rondas = 0
     errores = 0
@@ -97,6 +100,17 @@ def prefetch_fastf1(year: int) -> dict:
 
         for stype in ("Q", "R"):
             try:
+                try:
+                    sdate = event.get_session_date(stype)
+                except Exception:
+                    sdate = event.get("EventDate")
+
+                if pd.notna(sdate):
+                    if hasattr(sdate, "date"):
+                        sdate = sdate.date()
+                    if sdate > today:
+                        continue
+
                 _dump_session(year, round_num, stype)
                 rondas += 1
             except Exception as e:

@@ -6,6 +6,7 @@ vuelve a descargar.  Una corrida interrumpida puede continuarse sin
 perder lo ya guardado.
 """
 
+import datetime
 import time
 
 from f1.jolpica import fetch_json
@@ -30,10 +31,20 @@ def prefetch_jolpica(season: int) -> dict:
     """
     rondas_ok = 0
     errores = 0
+    today = datetime.date.today()
 
     carreras = calendario(season)
     for carrera in carreras:
         round_ = int(carrera["round"])
+
+        # Omitir si la carrera es posterior a la fecha actual.
+        race_date_str = carrera.get("date")
+        if race_date_str:
+            try:
+                if datetime.date.fromisoformat(race_date_str) > today:
+                    continue
+            except ValueError:
+                pass
 
         # results.json
         try:
