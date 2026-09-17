@@ -12,9 +12,10 @@ Estructura Bronze esperada:
   bronze/fastf1/{year}/{round}/{Q|R}/{results,laps}.csv
 
 OJO CON LA FUGA DE DATOS: varias columnas describen lo que pasó DURANTE la
-carrera (ritmo, pits, stints, posición por vuelta). Sirven para análisis
-descriptivo, pero NO se pueden usar como features para predecir el
-resultado de esa misma carrera. Ver LEAKY_COLS al final del archivo.
+carrera (ritmo, pits, stints, posición por vuelta). Son leaky SOLO cuando
+lap_cutoff=0 (predicción pre-carrera). En snapshots con lap_cutoff>0 las
+columnas "so_far" describen el pasado observable y son features válidas.
+Ver LEAKY_COLS en schema.py y build_race_snapshots() en este archivo.
 """
 
 from __future__ import annotations
@@ -215,7 +216,7 @@ def load_jolpica_results() -> pd.DataFrame:
     if len(df) != antes:
         log.info("jolpica: %s duplicados descartados", antes - len(df))
 
-    sin_code = int(df["driver_code"].isna().sum())
+    sin_code = df["driver_code"].isna().sum()
     if sin_code:
         log.warning("%s filas de Jolpica sin driver_code (no van a matchear con FastF1/OpenF1)", sin_code)
     return df
@@ -513,7 +514,7 @@ def load_openf1_session_index(calendario: pd.DataFrame) -> pd.DataFrame:
     races = races.dropna(subset=["date_start", "session_key", "year"])
     races = races.drop_duplicates(subset=["session_key"])
     races["season"] = pd.to_numeric(races["year"], errors="coerce").astype("Int64")
-    races["race_date"] = races["date_start"].dt.date
+    races["race_date"] = pd.to_datetime(races["date_start"], utc=True, errors="coerce").dt.date
 
     if calendario.empty:
         log.warning("Sin calendario de Jolpica, se usa orden por fecha para OpenF1")
@@ -529,7 +530,7 @@ def load_openf1_session_index(calendario: pd.DataFrame) -> pd.DataFrame:
     if sin_match.any():
         rank = (out.groupby("season")["date_start"].rank(method="first"))
         out.loc[sin_match, "round"] = rank[sin_match]
-        log.warning("openf1: %s sesión(es) sin fecha coincidente en Jolpica, resueltas por orden", int(sin_match.sum()))
+        log.warning("openf1: %s sesión(es) sin fecha coincidente en Jolpica, resueltas por orden", sin_match.sum())
 
     out["round"] = pd.to_numeric(out["round"], errors="coerce").astype("Int64")
     out = out.dropna(subset=["round"]).drop_duplicates(subset=["session_key"])
@@ -813,9 +814,358 @@ def build_unified_lap_race_features(race_path: str, laps_path: str,
     return str(destino)
 
 
+# =============================
+# Silver D: snapshots con target (piloto × carrera × lap_cutoff)
+# =============================
+
+def load_openf1_pits_raw(sessions: pd.DataFrame,
+                         dmap: pd.DataFrame) -> pd.DataFrame:
+    """Carga pits de OpenF1 sin agregar, una fila por parada.
+
+    Devuelve columnas: season, round, driver_code, pit_duration_s, date.
+    Necesario para vincular cada pit a una vuelta concreta (ver _map_pits_to_laps).
+    """
+    cols = ["season", "round", "driver_code", "pit_duration_s", "date"]
+    df = _openf1_concat("pit")
+    if df.empty or "driver_number" not in df.columns:
+        log.warning("load_openf1_pits_raw: sin datos de pit en Bronze/OpenF1")
+        return _empty(cols)
+
+    df["pit_duration_s"] = pd.to_numeric(_pick(df, "pit_duration"), errors="coerce")
+    if "date" not in df.columns:
+        df["date"] = pd.NaT
+
+    df = df[["session_key", "driver_number", "pit_duration_s", "date"]].copy()
+    df["driver_number"] = pd.to_numeric(df["driver_number"], errors="coerce").astype("Int64")
+
+    # session_key → (season, round)
+    out = df.merge(sessions, on="session_key", how="inner")
+    # driver_number → driver_code
+    dmap_c = dmap.copy()
+    dmap_c["driver_number"] = dmap_c["driver_number"].astype("Int64")
+    out = out.merge(dmap_c, on=["season", "round", "driver_number"], how="inner")
+    out = out.drop(columns=["session_key", "driver_number"])
+    out["date"] = pd.to_datetime(out["date"], utc=True, errors="coerce")
+    return out[cols]
+
+
+def _map_pits_to_laps(laps_df: pd.DataFrame,
+                      pits_raw: pd.DataFrame) -> pd.DataFrame:
+    """Asigna cada pit stop a la vuelta en que ocurrió.
+
+    Retorna: (season, round, driver_code, lap_number, pit_duration_s).
+
+    Estrategia primaria: compara el timestamp del pit con el rango de tiempo
+    de la vuelta (LapStartTime + LapTime de FastF1).
+
+    Fallback: si no hay timestamps usables, detecta el cambio de stint en
+    las vueltas — el pit ocurrió al final de la última vuelta del stint anterior.
+    """
+    cols = ["season", "round", "driver_code", "lap_number", "pit_duration_s"]
+
+    if pits_raw.empty or laps_df.empty:
+        return _empty(cols)
+
+    keys = ["season", "round", "driver_code"]
+
+    # --- Preparar laps con timestamps de inicio y fin de vuelta ---
+    laps = laps_df.copy()
+    has_lap_start = "lap_start_time" in laps.columns or "LapStartTime" in laps.columns
+    lap_start_col = "lap_start_time" if "lap_start_time" in laps.columns else (
+        "LapStartTime" if "LapStartTime" in laps.columns else None
+    )
+
+    results = []
+
+    if lap_start_col and pits_raw["date"].notna().any():
+        # --- Estrategia primaria: por timestamp ---
+        laps["_lap_start_ts"] = pd.to_datetime(laps[lap_start_col], utc=True,
+                                                errors="coerce")
+        laps_lap_time = laps["lap_time_s"] if "lap_time_s" in laps.columns else pd.Series(dtype="float64", index=laps.index)
+        laps["_lap_time_s"] = pd.to_numeric(laps_lap_time, errors="coerce")
+        laps["_lap_end_ts"] = laps["_lap_start_ts"] + pd.to_timedelta(
+            laps["_lap_time_s"], unit="s", errors="coerce"
+        )
+
+        pits_ts = pits_raw.dropna(subset=["date"]).copy()
+
+        for (season, rnd, drv), grp_laps in laps.groupby(keys):
+            grp_pits = pits_ts[
+                (pits_ts["season"] == season) &
+                (pits_ts["round"] == rnd) &
+                (pits_ts["driver_code"] == drv)
+            ]
+            if grp_pits.empty:
+                continue
+            grp_laps = grp_laps.dropna(subset=["_lap_start_ts", "_lap_end_ts"])
+            for _, pit_row in grp_pits.iterrows():
+                t = pit_row["date"]
+                # Buscar la vuelta cuyo rango de tiempo envuelve el pit
+                mask = (grp_laps["_lap_start_ts"] <= t) & (t <= grp_laps["_lap_end_ts"])
+                matched = grp_laps[mask]
+                if not matched.empty:
+                    lap_num = int(matched.iloc[0]["lap_number"])
+                    results.append({
+                        "season": season, "round": rnd,
+                        "driver_code": drv,
+                        "lap_number": lap_num,
+                        "pit_duration_s": pit_row["pit_duration_s"],
+                    })
+    else:
+        # --- Fallback: cambio de stint en laps (fin del stint anterior) ---
+        laps_sorted = laps.sort_values(keys + ["lap_number"])
+        if "stint" in laps_sorted.columns or "tyre_life" in laps_sorted.columns:
+            # Detectar vueltas donde el compuesto cambia respecto a la vuelta anterior
+            stint_col = "compound" if "compound" in laps_sorted.columns else None
+            if stint_col:
+                laps_sorted["_compound_shifted"] = laps_sorted.groupby(keys)[stint_col].shift(1)
+                pit_laps = laps_sorted[
+                    laps_sorted[stint_col].notna() &
+                    laps_sorted["_compound_shifted"].notna() &
+                    (laps_sorted[stint_col] != laps_sorted["_compound_shifted"])
+                ]
+                for _, row in pit_laps.iterrows():
+                    # La parada ocurrió en la vuelta de transición
+                    results.append({
+                        "season": row["season"], "round": row["round"],
+                        "driver_code": row["driver_code"],
+                        "lap_number": int(row["lap_number"]),
+                        "pit_duration_s": float("nan"),  # sin duración exacta
+                    })
+
+    if not results:
+        log.info("_map_pits_to_laps: sin pits mapeables a vueltas")
+        return _empty(cols)
+
+    out = pd.DataFrame(results)
+    out["lap_number"] = out["lap_number"].astype(int)
+    return out[cols]
+
+
+def build_total_race_time(laps_df: pd.DataFrame,
+                          pits_by_lap: pd.DataFrame) -> pd.DataFrame:
+    """Calcula el tiempo total de carrera por piloto (target).
+
+    total_race_time_s = Σ lap_time_s (todas las vueltas del piloto)
+                      + Σ pit_duration_s (todos sus pit stops)
+
+    NaN para pilotos sin vueltas válidas (no terminaron la carrera).
+    laps_total = max(lap_number) por piloto (independiente del ganador).
+    pit_time_available = True si OpenF1 aportó datos de pit para esta carrera.
+    """
+    cols = ["season", "round", "driver_code",
+            "total_race_time_s", "laps_total", "pit_time_available"]
+    if laps_df.empty:
+        return _empty(cols)
+
+    keys = ["season", "round", "driver_code"]
+
+    lap_agg = laps_df.groupby(keys).agg(
+        _lap_sum=("lap_time_s", "sum"),
+        laps_total=("lap_number", "max"),
+    ).reset_index()
+    lap_agg["_lap_sum"] = pd.to_numeric(lap_agg["_lap_sum"], errors="coerce")
+
+    if pits_by_lap.empty:
+        lap_agg["_pit_sum"] = 0.0
+        lap_agg["pit_time_available"] = False
+    else:
+        pit_agg = pits_by_lap.groupby(keys)["pit_duration_s"].sum().reset_index()
+        pit_agg = pit_agg.rename(columns={"pit_duration_s": "_pit_sum"})
+        lap_agg = lap_agg.merge(pit_agg, on=keys, how="left")
+        lap_agg["_pit_sum"] = lap_agg["_pit_sum"].fillna(0.0)
+        # pit_time_available = True si la carrera tiene al menos 1 pit con duración
+        races_with_pits = pits_by_lap.dropna(subset=["pit_duration_s"])
+        available = races_with_pits[["season", "round"]].drop_duplicates()
+        available["pit_time_available"] = True
+        lap_agg = lap_agg.merge(available, on=["season", "round"], how="left")
+        lap_agg["pit_time_available"] = lap_agg["pit_time_available"].fillna(False)
+
+    lap_agg["total_race_time_s"] = lap_agg["_lap_sum"] + lap_agg["_pit_sum"]
+    return lap_agg[cols]
+
+
+def build_lap_snapshot(laps_df: pd.DataFrame,
+                       pits_by_lap: pd.DataFrame,
+                       race_meta: pd.DataFrame,
+                       cutoff_pct: float) -> pd.DataFrame:
+    """Calcula features al momento del corte para todos los pilotos de todas las carreras.
+
+    cutoff_pct ∈ [0.0, 1.0]:
+      - 0.0: snapshot pre-carrera; todas las columnas 'so_far' son NaN.
+      - 1.0: snapshot post-carrera; cumulative_time_s ≈ total_race_time_s.
+
+    race_meta debe tener (season, round, driver_code, laps_total, grid_position).
+
+    Retorna un DataFrame con una fila por (season, round, driver_code) más:
+      lap_cutoff, pct_race_complete, cumulative_time_s, avg_lap_time_s_so_far,
+      current_position, position_gain_loss, pits_done_so_far, pit_time_so_far_s,
+      compound_at_cutoff.
+    """
+    keys = ["season", "round", "driver_code"]
+
+    # lap_cutoff por piloto = round(pct * laps_total), mínimo 0
+    meta = race_meta[keys + ["laps_total", "grid_position"]].copy()
+    meta["lap_cutoff"] = (meta["laps_total"] * cutoff_pct).round().astype(int).clip(lower=0)
+    meta["pct_race_complete"] = cutoff_pct
+
+    if cutoff_pct == 0.0:
+        # Pre-carrera: todas las columnas so_far son NaN
+        meta["cumulative_time_s"] = float("nan")
+        meta["avg_lap_time_s_so_far"] = float("nan")
+        meta["current_position"] = float("nan")
+        meta["position_gain_loss"] = float("nan")
+        meta["pits_done_so_far"] = float("nan")
+        meta["pit_time_so_far_s"] = float("nan")
+        meta["compound_at_cutoff"] = float("nan")
+        return meta.drop(columns=["laps_total", "grid_position"], errors="ignore")
+
+    # --- Agregar laps hasta el cutoff ---
+    laps = laps_df.merge(
+        meta[keys + ["lap_cutoff"]], on=keys, how="inner"
+    )
+    laps_cut = laps[laps["lap_number"] <= laps["lap_cutoff"]]
+
+    lap_agg = laps_cut.groupby(keys).agg(
+        cumulative_lap_s=("lap_time_s", "sum"),
+        avg_lap_time_s_so_far=("lap_time_s", "mean"),
+        compound_at_cutoff=("compound", "last"),  # último compuesto registrado
+    ).reset_index()
+
+    # --- Agregar pits hasta el cutoff ---
+    if not pits_by_lap.empty:
+        pits = pits_by_lap.merge(
+            meta[keys + ["lap_cutoff"]], on=keys, how="inner"
+        )
+        pits_cut = pits[pits["lap_number"] <= pits["lap_cutoff"]]
+        pit_agg = pits_cut.groupby(keys).agg(
+            pits_done_so_far=("pit_duration_s", "count"),
+            pit_time_so_far_s=("pit_duration_s", "sum"),
+        ).reset_index()
+        lap_agg = lap_agg.merge(pit_agg, on=keys, how="left")
+    else:
+        lap_agg["pits_done_so_far"] = float("nan")
+        lap_agg["pit_time_so_far_s"] = float("nan")
+
+    lap_agg["pit_time_so_far_s"] = lap_agg["pit_time_so_far_s"].fillna(0.0)
+    lap_agg["pits_done_so_far"] = lap_agg["pits_done_so_far"].fillna(0).astype(int)
+
+    lap_agg["cumulative_time_s"] = (
+        pd.to_numeric(lap_agg["cumulative_lap_s"], errors="coerce")
+        + lap_agg["pit_time_so_far_s"]
+    )
+
+    # --- Posición virtual: rank ascendente por cumulative_time_s por carrera ---
+    lap_agg["current_position"] = (
+        lap_agg.groupby(["season", "round"])["cumulative_time_s"]
+        .rank(method="min", ascending=True)
+        .astype("Int64")
+    )
+
+    # Unir grid_position para calcular ganancia/pérdida
+    lap_agg = lap_agg.merge(meta[keys + ["grid_position", "lap_cutoff", "pct_race_complete"]],
+                             on=keys, how="left")
+    lap_agg["position_gain_loss"] = (
+        pd.to_numeric(lap_agg["grid_position"], errors="coerce")
+        - lap_agg["current_position"]
+    )
+
+    return lap_agg.drop(columns=["cumulative_lap_s", "grid_position"], errors="ignore")
+
+
+def build_race_snapshots(race_path: str, laps_path: str,
+                         date_suffix: str = "",
+                         cutoff_pcts: list[float] | None = None) -> str:
+    """Genera el Silver D: una fila por (piloto × carrera × lap_cutoff).
+
+    Para cada punto de corte en cutoff_pcts (default: 0%, 25%, 50%, 75%, 100%),
+    calcula las features al momento del corte y el target total_race_time_s.
+
+    Escribe en silver/driver_race_snapshots_{date_suffix}.csv y retorna el path.
+    """
+    if cutoff_pcts is None:
+        cutoff_pcts = [0.0, 0.25, 0.50, 0.75, 1.0]
+
+    log.info("== Silver D: build_race_snapshots (cutoffs: %s) ==", cutoff_pcts)
+    SILVER.mkdir(parents=True, exist_ok=True)
+
+    df_race = pd.read_csv(race_path)
+    df_laps = pd.read_csv(laps_path)
+
+    if df_race.empty:
+        raise ValueError("Silver Race está vacío.")
+    if df_laps.empty:
+        raise ValueError("Silver Laps está vacío.")
+
+    # Aseguramos tipos correctos en lap_number
+    df_laps["lap_number"] = pd.to_numeric(df_laps["lap_number"], errors="coerce")
+    df_laps = df_laps.dropna(subset=["lap_number"])
+    df_laps["lap_number"] = df_laps["lap_number"].astype(int)
+
+    # Cargar pits raw de OpenF1
+    calendario = load_calendario(load_jolpica_results())
+    sessions = load_openf1_session_index(calendario)
+    dmap = load_fastf1_driver_map()
+    pits_raw = load_openf1_pits_raw(sessions, dmap)
+    pits_by_lap = _map_pits_to_laps(df_laps, pits_raw)
+    log.info("pits mapeados a vueltas: %s filas", len(pits_by_lap))
+
+    # Calcular target (total_race_time_s) y laps_total por piloto
+    race_time_df = build_total_race_time(df_laps, pits_by_lap)
+    log.info("total_race_time_s calculado: %s pilotos-carrera", len(race_time_df))
+
+    # race_meta: info constante por piloto-carrera para los snapshots
+    keys = ["season", "round", "driver_code"]
+    race_cols_to_keep = [c for c in df_race.columns if c in keys or c not in [
+        # excluir columnas que se recalculan en snapshot
+        "cumulative_time_s", "avg_lap_time_s_so_far", "current_position",
+        "position_gain_loss", "pits_done_so_far", "pit_time_so_far_s",
+        "compound_at_cutoff", "total_race_time_s", "laps_total",
+        "pit_time_available", "lap_cutoff", "pct_race_complete",
+    ]]
+    race_base = df_race[race_cols_to_keep].drop_duplicates(subset=keys)
+
+    # race_meta necesita laps_total y grid_position para calcular el cutoff
+    race_meta = race_base[keys + ["grid_position"]].merge(
+        race_time_df[keys + ["laps_total"]], on=keys, how="left"
+    )
+
+    # Construir un snapshot por cada punto de corte
+    snapshot_frames = []
+    for pct in cutoff_pcts:
+        snap = build_lap_snapshot(df_laps, pits_by_lap, race_meta, pct)
+        snap_with_race = race_base.merge(snap, on=keys, how="left")
+        snap_with_race = snap_with_race.merge(
+            race_time_df[keys + ["total_race_time_s", "laps_total", "pit_time_available"]],
+            on=keys, how="left"
+        )
+        snapshot_frames.append(snap_with_race)
+        log.info("Snapshot pct=%.0f%%: %s filas", pct * 100, len(snap_with_race))
+
+    df_out = pd.concat(snapshot_frames, ignore_index=True)
+
+    # Ordenar columnas según schema
+    SNAP_COL_ORDER = schema.SNAPSHOT_COLUMNS
+    orden = [c for c in SNAP_COL_ORDER if c in df_out.columns]
+    resto = [c for c in df_out.columns if c not in orden]
+    df_out = df_out[orden + resto].sort_values(
+        ["season", "round", "driver_code", "lap_cutoff"]
+    )
+
+    filename = (
+        f"driver_race_snapshots_{date_suffix}.csv"
+        if date_suffix else "driver_race_snapshots.csv"
+    )
+    destino = SILVER / filename
+    df_out.to_csv(destino, index=False)
+    log.info("OK -> %s (%s filas, %s columnas)", destino, len(df_out), df_out.shape[1])
+    return str(destino)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     r_path = build_driver_race_features()
     l_path = build_driver_lap_features()
     build_unified_lap_race_features(r_path, l_path)
-    log.info("RECORDATORIO: columnas post-carrera (no usar como features para predecir): %s", ", ".join(LEAKY_COLS))
+    build_race_snapshots(r_path, l_path)
+    log.info("RECORDATORIO: columnas post-carrera (no usar como features para predecir con lap_cutoff=0): %s", ", ".join(LEAKY_COLS))

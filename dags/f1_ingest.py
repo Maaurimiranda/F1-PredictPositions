@@ -2,9 +2,10 @@
 ### Pipeline de datos F1 — Ciencia de Datos, UTN FRM 2026
 
 Construye el dataset de carreras de Fórmula 1 para predecir el Top 10
-antes del inicio de cada carrera, siguiendo el modelo medallón en dos capas.
+en cualquier momento de la carrera (pre-carrera, durante o al final),
+siguiendo el modelo medallón en dos capas más una capa de columnas objetivo.
 
-**Dos capas, dos bloques de tareas en el grafo:**
+**Dos capas + columnas objetivo:**
 
 * **Bronze** (`ingest_jolpica`, `ingest_openf1`, `ingest_fastf1`) — datos
   crudos tal como los devuelven las APIs, guardados en disco y particionados
@@ -13,6 +14,11 @@ antes del inicio de cada carrera, siguiendo el modelo medallón en dos capas.
 * **Silver** (`build_silver_race`, `build_silver_laps`, `build_unified_silver`) —
   tablas tipadas y deduplicadas. No toca la red: lee del bronce y enriquece
   las vueltas con toda la información disponible a nivel de carrera.
+
+* **Columnas objetivo** (`build_objective_columns`) — extiende Silver con
+  snapshots por punto de corte (0%, 25%, 50%, 75%, 100% de vueltas completadas).
+  Cada snapshot calcula el tiempo acumulado al corte (vueltas + pit stops) y
+  el target `total_race_time_s` (tiempo total de carrera por piloto).
 
 La separación no es decorativa. Si aparece un bug en el parseo, se corrige
 Silver y se reprocesa el bronce que ya está en disco, sin volver a llamar a
@@ -185,6 +191,74 @@ def f1_ingest():
         return "Validación Laps: OK"
 
     @task
+    def build_objective_columns(race_path: str, laps_path: str, **context) -> str:
+        """Genera el Silver D: snapshots de predicción en 5 puntos de corte.
+
+        Para cada piloto-carrera produce 5 filas (0%, 25%, 50%, 75%, 100% de la
+        carrera), con features al momento del corte y el target total_race_time_s
+        (suma de tiempos de vuelta + pit stops).
+        """
+        from f1.silver_builder import build_race_snapshots
+        dag_run = context["dag_run"]
+        momento = dag_run.logical_date or dag_run.run_after
+        ds = momento.date().isoformat()
+        log.info("Construyendo columnas objetivo (snapshots) con sufijo %s", ds)
+        ruta = build_race_snapshots(race_path, laps_path, date_suffix=ds)
+        log.info("Columnas objetivo escritas en %s", ruta)
+        return ruta
+
+    @task
+    def validate_objective_columns(ruta: str, **context) -> str:
+        import pandas as pd
+        mode = context["params"].get("mode", "full")
+        log.info("Validando columnas objetivo desde %s (modo %s)", ruta, mode)
+        df = pd.read_csv(ruta)
+
+        # 1. Clave sin duplicados
+        key_cols = ["season", "round", "driver_code", "lap_cutoff"]
+        faltantes = [c for c in key_cols if c not in df.columns]
+        if faltantes:
+            raise ValueError(f"Faltan columnas de la clave primaria: {faltantes}")
+        dup_count = int(df.duplicated(subset=key_cols).sum())
+        if dup_count:
+            raise ValueError(
+                f"Clave duplicada en snapshots: {dup_count} filas repetidas sobre {key_cols}."
+            )
+        log.info("1. Clave única OK: %s", key_cols)
+
+        # 2. Exactamente 5 snapshots por piloto-carrera
+        counts = df.groupby(["season", "round", "driver_code"])["lap_cutoff"].nunique()
+        wrong = counts[counts != 5]
+        if not wrong.empty:
+            log.warning(
+                "2. Pilotos-carrera sin exactamente 5 snapshots: %s casos", len(wrong)
+            )
+        else:
+            log.info("2. Exactamente 5 snapshots por piloto-carrera OK")
+
+        # 3. Target presente en al menos algunos clasificados
+        if "total_race_time_s" not in df.columns:
+            raise ValueError("Falta la columna target 'total_race_time_s'.")
+        n_target = df["total_race_time_s"].notna().sum()
+        if n_target == 0:
+            raise ValueError("'total_race_time_s' está 100%% vacío.")
+        log.info("3. Target total_race_time_s: %s valores no nulos", n_target)
+
+        # 4. NaN en cutoff=0 para columnas so_far
+        cutoff0 = df[df["lap_cutoff"] == 0]
+        so_far_cols = ["cumulative_time_s", "avg_lap_time_s_so_far", "current_position"]
+        for col in so_far_cols:
+            if col in df.columns and cutoff0[col].notna().any():
+                log.warning(
+                    "4. Columna '%s' tiene valores no-NaN para lap_cutoff=0 — revisar.", col
+                )
+        log.info("4. Columnas so_far OK para cutoff=0")
+
+        log.info("Validación columnas objetivo EXITOSA: %s filas x %s columnas",
+                 len(df), df.shape[1])
+        return "Validación Columnas Objetivo: OK"
+
+    @task
     def build_unified_silver(race_path: str, laps_path: str, **context) -> str:
         from f1.silver_builder import build_unified_lap_race_features
         dag_run = context["dag_run"]
@@ -308,6 +382,11 @@ def f1_ingest():
     [val_race, val_laps] >> unified_path
 
     validate_unified_silver(unified_path)
+
+    # Columnas objetivo: snapshots con target (Silver D)
+    snapshots_path = build_objective_columns(race_path, laps_path)
+    [val_race, val_laps] >> snapshots_path
+    validate_objective_columns(snapshots_path)
 
 
 f1_ingest()

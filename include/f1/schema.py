@@ -7,6 +7,11 @@ contienen información post-carrera que NO se puede usar como feature predictivo
 
 Centralizar el schema acá evita tener estas listas dispersas en silver_builder.py
 y en el DAG — si se agrega una columna, el cambio vive en un solo lugar.
+
+Silver D (driver_race_snapshots):
+  Una fila por (season, round, driver_code, lap_cutoff). El lap_cutoff define el
+  momento de la carrera en que se "congela" la observación: 0 = pre-carrera,
+  N = durante la carrera. El target es total_race_time_s.
 """
 from __future__ import annotations
 
@@ -39,7 +44,9 @@ RACE_KEY: list[str] = ["season", "round", "driver_id"]
 RACE_OBLIGATORIAS: list[str] = ["season", "round", "driver_id", "finish_position"]
 
 # Columnas que describen lo ocurrido DURANTE la carrera.
-# No usar como features para predecir el resultado de esa misma carrera.
+# OJO: son leaky SOLO cuando lap_cutoff=0 (predicción pre-carrera).
+# En snapshots con lap_cutoff>0, las columnas "so_far" describen el pasado
+# observable y son features válidas; NO mezclarlas con las de carrera completa.
 LEAKY_COLS: list[str] = [
     "finish_position", "classified", "points", "status",
     "laps_completed", "laps_completed_jolpica",
@@ -102,3 +109,53 @@ UNIFIED_LAP_RACE_COLUMNS: list[str] = [
 UNIFIED_LAP_RACE_KEY: list[str] = ["season", "round", "driver_code", "lap_number"]
 UNIFIED_LAP_RACE_OBLIGATORIAS: list[str] = ["season", "round", "driver_code", "lap_number", "lap_time_s"]
 
+
+# ──────────────────────────────────────────────
+# Silver D: piloto × carrera × lap_cutoff (snapshots con target)
+# ──────────────────────────────────────────────
+
+# Clave primaria del dataset de snapshots.
+SILVER_SNAPSHOT_KEY: list[str] = ["season", "round", "driver_code", "lap_cutoff"]
+
+# Columna objetivo: tiempo total de carrera en segundos.
+# total_race_time_s = Σ lap_time_s (todas las vueltas del piloto)
+#                   + Σ pit_duration_s (todos sus pit stops)
+# NaN para pilotos que no terminaron la carrera (classified=False).
+SILVER_TARGET: str = "total_race_time_s"
+
+# Orden canónico de columnas del dataset de snapshots.
+SNAPSHOT_COLUMNS: list[str] = [
+    # Identificadores y contexto de carrera
+    "season", "round", "race_date", "race_name", "circuit_id", "circuit_name",
+    # Piloto y equipo
+    "driver_id", "driver_code", "driver_name",
+    "constructor_id", "constructor_name", "team_name",
+    # --- Dimensión de snapshot ---
+    "lap_cutoff",        # vuelta en que se congela la observación (0 = pre-carrera)
+    "pct_race_complete", # lap_cutoff / laps_total (0.0 – 1.0)
+    "laps_total",        # total de vueltas completadas por este piloto
+    # --- Features pre-carrera (siempre disponibles) ---
+    "grid_position", "grid_position_ff1", "pit_lane_start",
+    "quali_position", "q1_s", "q2_s", "q3_s", "quali_best_s",
+    "driver_standing_before", "driver_points_before", "driver_wins_before",
+    "air_temp", "track_temp", "humidity", "pressure", "wind_speed", "rainfall_max",
+    # --- Features al momento del corte (NaN si lap_cutoff=0) ---
+    "cumulative_time_s",      # Σ lap times + Σ pit times hasta el corte
+    "avg_lap_time_s_so_far",  # ritmo promedio de vueltas puras hasta el corte
+    "current_position",       # posición virtual por ranking de cumulative_time_s
+    "position_gain_loss",     # grid_position - current_position
+    "pits_done_so_far",       # paradas realizadas hasta el corte
+    "pit_time_so_far_s",      # tiempo total en boxes hasta el corte
+    "compound_at_cutoff",     # compuesto de neumático en uso al corte
+    # --- Target ---
+    "total_race_time_s",      # Σ lap times completos + Σ pit durations (target)
+    "pit_time_available",     # True si hay datos de pit de OpenF1 para esta carrera
+    # --- Referencia (no usar como target) ---
+    "finish_position",        # posición de llegada Jolpica (1-20), solo referencia
+    "classified", "points", "status",
+    "laps_completed", "laps_completed_jolpica",
+]
+
+SNAPSHOT_OBLIGATORIAS: list[str] = [
+    "season", "round", "driver_code", "lap_cutoff", "laps_total",
+]
