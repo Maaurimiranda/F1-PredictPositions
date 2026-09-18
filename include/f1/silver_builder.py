@@ -979,7 +979,7 @@ def build_total_race_time(laps_df: pd.DataFrame,
         available = races_with_pits[["season", "round"]].drop_duplicates()
         available["pit_time_available"] = True
         lap_agg = lap_agg.merge(available, on=["season", "round"], how="left")
-        lap_agg["pit_time_available"] = lap_agg["pit_time_available"].fillna(False)
+        lap_agg["pit_time_available"] = lap_agg["pit_time_available"].fillna(False).astype(bool)
 
     lap_agg["total_race_time_s"] = lap_agg["_lap_sum"] + lap_agg["_pit_sum"]
     return lap_agg[cols]
@@ -1006,6 +1006,7 @@ def build_lap_snapshot(laps_df: pd.DataFrame,
 
     # lap_cutoff por piloto = round(pct * laps_total), mínimo 0
     meta = race_meta[keys + ["laps_total", "grid_position"]].copy()
+    meta["laps_total"] = pd.to_numeric(meta["laps_total"], errors="coerce").fillna(0).astype(int)
     meta["lap_cutoff"] = (meta["laps_total"] * cutoff_pct).round().astype(int).clip(lower=0)
     meta["pct_race_complete"] = cutoff_pct
 
@@ -1062,15 +1063,17 @@ def build_lap_snapshot(laps_df: pd.DataFrame,
         .astype("Int64")
     )
 
-    # Unir grid_position para calcular ganancia/pérdida
-    lap_agg = lap_agg.merge(meta[keys + ["grid_position", "lap_cutoff", "pct_race_complete"]],
-                             on=keys, how="left")
-    lap_agg["position_gain_loss"] = (
-        pd.to_numeric(lap_agg["grid_position"], errors="coerce")
-        - lap_agg["current_position"]
+    # Unir con meta para mantener a todos los pilotos de meta (incluso con lap_cutoff == 0)
+    out = meta[keys + ["grid_position", "lap_cutoff", "pct_race_complete"]].merge(
+        lap_agg.drop(columns=["grid_position", "lap_cutoff", "pct_race_complete"], errors="ignore"),
+        on=keys, how="left"
+    )
+    out["position_gain_loss"] = (
+        pd.to_numeric(out["grid_position"], errors="coerce")
+        - out["current_position"]
     )
 
-    return lap_agg.drop(columns=["cumulative_lap_s", "grid_position"], errors="ignore")
+    return out.drop(columns=["cumulative_lap_s", "grid_position"], errors="ignore")
 
 
 def build_race_snapshots(race_path: str, laps_path: str,
@@ -1124,6 +1127,8 @@ def build_race_snapshots(race_path: str, laps_path: str,
         "pit_time_available", "lap_cutoff", "pct_race_complete",
     ]]
     race_base = df_race[race_cols_to_keep].drop_duplicates(subset=keys)
+    # Filtrar solo a los pilotos/carreras con datos de vueltas en race_time_df
+    race_base = race_base.merge(race_time_df[keys], on=keys, how="inner")
 
     # race_meta necesita laps_total y grid_position para calcular el cutoff
     race_meta = race_base[keys + ["grid_position"]].merge(
@@ -1143,6 +1148,8 @@ def build_race_snapshots(race_path: str, laps_path: str,
         log.info("Snapshot pct=%.0f%%: %s filas", pct * 100, len(snap_with_race))
 
     df_out = pd.concat(snapshot_frames, ignore_index=True)
+    # Deduplicar por la clave primaria del dataset de snapshots
+    df_out = df_out.drop_duplicates(subset=schema.SILVER_SNAPSHOT_KEY, keep="first")
 
     # Ordenar columnas según schema
     SNAP_COL_ORDER = schema.SNAPSHOT_COLUMNS
@@ -1168,4 +1175,4 @@ if __name__ == "__main__":
     l_path = build_driver_lap_features()
     build_unified_lap_race_features(r_path, l_path)
     build_race_snapshots(r_path, l_path)
-    log.info("RECORDATORIO: columnas post-carrera (no usar como features para predecir con lap_cutoff=0): %s", ", ".join(LEAKY_COLS))
+    log.info("RECORDATORIO: columnas post-carrera (no usar como features para predecir con lap_cutoff=0): %s", ", ".join(LEAKY_COLS))
