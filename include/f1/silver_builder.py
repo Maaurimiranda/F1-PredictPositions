@@ -994,6 +994,13 @@ def build_total_race_time(laps_df: pd.DataFrame,
     # NOTA: lap_time_s de FastF1 ya incluye el tiempo transcurrido en el pit lane.
     # Por ende, total_race_time_s es la suma de lap_time_s (sin sumar _pit_sum para no duplicar).
     lap_agg["total_race_time_s"] = lap_agg["_lap_sum"]
+
+    # Pilotos que abandonaron en vuelta 1 (colisión, etc.) tienen lap_time_s nulos en FastF1,
+    # lo que produce _lap_sum == 0. Un tiempo de carrera de 0 segundos es inválido → NaN.
+    lap_agg["total_race_time_s"] = lap_agg["total_race_time_s"].where(
+        lap_agg["total_race_time_s"] > 0, other=pd.NA
+    )
+
     return lap_agg[cols]
 
 
