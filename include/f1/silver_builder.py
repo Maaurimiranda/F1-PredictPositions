@@ -991,8 +991,26 @@ def build_total_race_time(laps_df: pd.DataFrame,
         lap_agg = lap_agg.merge(available, on=["season", "round"], how="left")
         lap_agg["pit_time_available"] = lap_agg["pit_time_available"].fillna(False).astype(bool)
 
-    lap_agg["total_race_time_s"] = lap_agg["_lap_sum"] + lap_agg["_pit_sum"]
+    # NOTA: lap_time_s de FastF1 ya incluye el tiempo transcurrido en el pit lane.
+    # Por ende, total_race_time_s es la suma de lap_time_s (sin sumar _pit_sum para no duplicar).
+    lap_agg["total_race_time_s"] = lap_agg["_lap_sum"]
     return lap_agg[cols]
+
+
+def build_race_length(laps_df: pd.DataFrame) -> pd.DataFrame:
+    """Vueltas totales de la carrera definidas por la vuelta máxima registrada (el líder).
+
+    Se calcula por (season, round) para que todos los pilotos de una carrera compartan
+    el mismo total, incluso los que abandonaron temprano o no completaron vueltas.
+    """
+    if laps_df.empty:
+        return pd.DataFrame(columns=["season", "round", "race_laps_total"])
+    return (
+        laps_df.groupby(["season", "round"])["lap_number"]
+        .max()
+        .rename("race_laps_total")
+        .reset_index()
+    )
 
 
 def build_lap_snapshot(laps_df: pd.DataFrame,
@@ -1005,31 +1023,34 @@ def build_lap_snapshot(laps_df: pd.DataFrame,
       - 0.0: snapshot pre-carrera; todas las columnas 'so_far' son NaN.
       - 1.0: snapshot post-carrera; cumulative_time_s ≈ total_race_time_s.
 
-    race_meta debe tener (season, round, driver_code, laps_total, grid_position).
+    race_meta debe tener (season, round, driver_code, race_laps_total, grid_position).
+    El corte es el mismo para todos los pilotos de una misma carrera (definido por el líder).
 
     Retorna un DataFrame con una fila por (season, round, driver_code) más:
       lap_cutoff, pct_race_complete, cumulative_time_s, avg_lap_time_s_so_far,
-      current_position, position_gain_loss, pits_done_so_far, pit_time_so_far_s,
-      compound_at_cutoff.
+      laps_done_at_cutoff, current_position, position_gain_loss,
+      pits_done_so_far, pit_time_so_far_s, compound_at_cutoff.
     """
     keys = ["season", "round", "driver_code"]
 
-    # lap_cutoff por piloto = round(pct * laps_total), mínimo 0
-    meta = race_meta[keys + ["laps_total", "grid_position"]].copy()
-    meta["laps_total"] = pd.to_numeric(meta["laps_total"], errors="coerce").fillna(0).astype(int)
-    meta["lap_cutoff"] = (meta["laps_total"] * cutoff_pct).round().astype(int).clip(lower=0)
+    # ARREGLO 1: el corte sale de las vueltas del líder (race_laps_total), no del propio piloto
+    meta = race_meta[keys + ["race_laps_total", "grid_position"]].copy()
+    meta["race_laps_total"] = pd.to_numeric(
+        meta["race_laps_total"], errors="coerce").fillna(0).astype(int)
+    meta["lap_cutoff"] = (meta["race_laps_total"] * cutoff_pct).round().astype(int).clip(lower=0)
     meta["pct_race_complete"] = cutoff_pct
 
     if cutoff_pct == 0.0:
         # Pre-carrera: todas las columnas so_far son NaN
         meta["cumulative_time_s"] = float("nan")
         meta["avg_lap_time_s_so_far"] = float("nan")
+        meta["laps_done_at_cutoff"] = float("nan")
         meta["current_position"] = float("nan")
         meta["position_gain_loss"] = float("nan")
         meta["pits_done_so_far"] = float("nan")
         meta["pit_time_so_far_s"] = float("nan")
         meta["compound_at_cutoff"] = float("nan")
-        return meta.drop(columns=["laps_total", "grid_position"], errors="ignore")
+        return meta.drop(columns=["race_laps_total", "grid_position"], errors="ignore")
 
     # --- Agregar laps hasta el cutoff ---
     laps = laps_df.merge(
@@ -1038,12 +1059,13 @@ def build_lap_snapshot(laps_df: pd.DataFrame,
     laps_cut = laps[laps["lap_number"] <= laps["lap_cutoff"]]
 
     lap_agg = laps_cut.groupby(keys).agg(
-        cumulative_lap_s=("lap_time_s", "sum"),
+        cumulative_time_s=("lap_time_s", "sum"),  # FastF1 lap_time_s ya incluye el pit stop
         avg_lap_time_s_so_far=("lap_time_s", "mean"),
+        laps_done_at_cutoff=("lap_number", "max"),
         compound_at_cutoff=("compound", "last"),  # último compuesto registrado
     ).reset_index()
 
-    # --- Agregar pits hasta el cutoff ---
+    # --- Agregar pits hasta el cutoff (features descriptivas) ---
     if not pits_by_lap.empty:
         pits = pits_by_lap.merge(
             meta[keys + ["lap_cutoff"]], on=keys, how="inner"
@@ -1061,29 +1083,27 @@ def build_lap_snapshot(laps_df: pd.DataFrame,
     lap_agg["pit_time_so_far_s"] = lap_agg["pit_time_so_far_s"].fillna(0.0)
     lap_agg["pits_done_so_far"] = lap_agg["pits_done_so_far"].fillna(0).astype(int)
 
-    lap_agg["cumulative_time_s"] = (
-        pd.to_numeric(lap_agg["cumulative_lap_s"], errors="coerce")
-        + lap_agg["pit_time_so_far_s"]
-    )
-
-    # --- Posición virtual: rank ascendente por cumulative_time_s por carrera ---
-    lap_agg["current_position"] = (
-        lap_agg.groupby(["season", "round"])["cumulative_time_s"]
-        .rank(method="min", ascending=True)
-        .astype("Int64")
-    )
-
-    # Unir con meta para mantener a todos los pilotos de meta (incluso con lap_cutoff == 0)
+    # Unir con meta para mantener a todos los pilotos (incluso con lap_cutoff == 0 o sin vueltas)
     out = meta[keys + ["grid_position", "lap_cutoff", "pct_race_complete"]].merge(
         lap_agg.drop(columns=["grid_position", "lap_cutoff", "pct_race_complete"], errors="ignore"),
         on=keys, how="left"
     )
+    out["laps_done_at_cutoff"] = out["laps_done_at_cutoff"].fillna(0).astype(int)
+    out["pits_done_so_far"] = out["pits_done_so_far"].fillna(0).astype(int)
+
+    # ARREGLO 2: clasificación FIA — primero más vueltas completadas, luego menor tiempo acumulado
+    out["current_position"] = (
+        out.sort_values(["season", "round", "laps_done_at_cutoff", "cumulative_time_s"],
+                        ascending=[True, True, False, True])
+           .groupby(["season", "round"]).cumcount() + 1
+    )
+
     out["position_gain_loss"] = (
         pd.to_numeric(out["grid_position"], errors="coerce")
         - out["current_position"]
     )
 
-    return out.drop(columns=["cumulative_lap_s", "grid_position"], errors="ignore")
+    return out.drop(columns=["race_laps_total", "grid_position"], errors="ignore")
 
 
 def build_race_snapshots(race_path: str, laps_path: str,
@@ -1140,9 +1160,10 @@ def build_race_snapshots(race_path: str, laps_path: str,
     # Filtrar solo a los pilotos/carreras con datos de vueltas en race_time_df
     race_base = race_base.merge(race_time_df[keys], on=keys, how="inner")
 
-    # race_meta necesita laps_total y grid_position para calcular el cutoff
+    # race_meta necesita race_laps_total y grid_position para calcular el cutoff
+    race_length = build_race_length(df_laps)
     race_meta = race_base[keys + ["grid_position"]].merge(
-        race_time_df[keys + ["laps_total"]], on=keys, how="left"
+        race_length[["season", "round", "race_laps_total"]], on=["season", "round"], how="left"
     )
 
     # Construir un snapshot por cada punto de corte
