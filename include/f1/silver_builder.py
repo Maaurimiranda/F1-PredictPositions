@@ -953,15 +953,25 @@ def _map_pits_to_laps(laps_df: pd.DataFrame,
 
 
 def build_total_race_time(laps_df: pd.DataFrame,
-                          pits_by_lap: pd.DataFrame) -> pd.DataFrame:
+                          pits_by_lap: pd.DataFrame,
+                          classified_df: pd.DataFrame | None = None) -> pd.DataFrame:
     """Calcula el tiempo total de carrera por piloto (target).
 
     total_race_time_s = Σ lap_time_s (todas las vueltas del piloto)
                       + Σ pit_duration_s (todos sus pit stops)
 
-    NaN para pilotos sin vueltas válidas (no terminaron la carrera).
+    NaN para pilotos que no terminaron la carrera (classified=False) o sin
+    vueltas válidas. El schema define que total_race_time_s solo es un target
+    significativo para pilotos clasificados (finished/lapped).
     laps_total = max(lap_number) por piloto (independiente del ganador).
     pit_time_available = True si OpenF1 aportó datos de pit para esta carrera.
+
+    Args:
+        laps_df: DataFrame de vueltas de FastF1.
+        pits_by_lap: DataFrame de pit stops mapeados a vuelta.
+        classified_df: DataFrame con columnas (season, round, driver_code,
+            classified). Si se provee, los pilotos con classified=False quedan
+            con total_race_time_s = NaN (consistente con schema.SILVER_TARGET).
     """
     cols = ["season", "round", "driver_code",
             "total_race_time_s", "laps_total", "pit_time_available"]
@@ -995,11 +1005,22 @@ def build_total_race_time(laps_df: pd.DataFrame,
     # Por ende, total_race_time_s es la suma de lap_time_s (sin sumar _pit_sum para no duplicar).
     lap_agg["total_race_time_s"] = lap_agg["_lap_sum"]
 
-    # Pilotos que abandonaron en vuelta 1 (colisión, etc.) tienen lap_time_s nulos en FastF1,
-    # lo que produce _lap_sum == 0. Un tiempo de carrera de 0 segundos es inválido → NaN.
+    # Suma == 0: piloto sin ningún lap_time_s válido (colisión vuelta 1, etc.) → NaN.
     lap_agg["total_race_time_s"] = lap_agg["total_race_time_s"].where(
         lap_agg["total_race_time_s"] > 0, other=pd.NA
     )
+
+    # DNFs (classified=False): el tiempo es parcial y no es un target de ranking válido.
+    # Schema define: "NaN para pilotos que no terminaron la carrera (classified=False)."
+    if classified_df is not None and not classified_df.empty:
+        clf = classified_df[keys + ["classified"]].drop_duplicates(subset=keys)
+        lap_agg = lap_agg.merge(clf, on=keys, how="left")
+        dnf_mask = lap_agg["classified"].eq(False)
+        lap_agg.loc[dnf_mask, "total_race_time_s"] = pd.NA
+        dnf_count = int(dnf_mask.sum())
+        if dnf_count:
+            log.info("build_total_race_time: %s DNFs → total_race_time_s = NaN", dnf_count)
+        lap_agg = lap_agg.drop(columns=["classified"])
 
     return lap_agg[cols]
 
@@ -1151,7 +1172,10 @@ def build_race_snapshots(race_path: str, laps_path: str,
     log.info("pits mapeados a vueltas: %s filas", len(pits_by_lap))
 
     # Calcular target (total_race_time_s) y laps_total por piloto
-    race_time_df = build_total_race_time(df_laps, pits_by_lap)
+    # Se pasa classified_df para que los DNFs (classified=False) queden con NaN,
+    # consistente con schema.SILVER_TARGET: solo pilotos clasificados tienen target válido.
+    classified_df = df_race[["season", "round", "driver_code", "classified"]].drop_duplicates()
+    race_time_df = build_total_race_time(df_laps, pits_by_lap, classified_df=classified_df)
     log.info("total_race_time_s calculado: %s pilotos-carrera", len(race_time_df))
 
     # race_meta: info constante por piloto-carrera para los snapshots
