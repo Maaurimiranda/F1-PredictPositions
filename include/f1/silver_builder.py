@@ -822,20 +822,21 @@ def load_openf1_pits_raw(sessions: pd.DataFrame,
                          dmap: pd.DataFrame) -> pd.DataFrame:
     """Carga pits de OpenF1 sin agregar, una fila por parada.
 
-    Devuelve columnas: season, round, driver_code, pit_duration_s, date.
+    Devuelve columnas: season, round, driver_code, lap_number, pit_duration_s, date.
     Necesario para vincular cada pit a una vuelta concreta (ver _map_pits_to_laps).
     """
-    cols = ["season", "round", "driver_code", "pit_duration_s", "date"]
+    cols = ["season", "round", "driver_code", "lap_number", "pit_duration_s", "date"]
     df = _openf1_concat("pit")
     if df.empty or "driver_number" not in df.columns:
         log.warning("load_openf1_pits_raw: sin datos de pit en Bronze/OpenF1")
         return _empty(cols)
 
     df["pit_duration_s"] = pd.to_numeric(_pick(df, "pit_duration"), errors="coerce")
+    df["lap_number"] = pd.to_numeric(_pick(df, "lap_number"), errors="coerce")
     if "date" not in df.columns:
         df["date"] = pd.NaT
 
-    df = df[["session_key", "driver_number", "pit_duration_s", "date"]].copy()
+    df = df[["session_key", "driver_number", "lap_number", "pit_duration_s", "date"]].copy()
     df["driver_number"] = pd.to_numeric(df["driver_number"], errors="coerce").astype("Int64")
 
     # session_key → (season, round)
@@ -855,9 +856,9 @@ def _map_pits_to_laps(laps_df: pd.DataFrame,
 
     Retorna: (season, round, driver_code, lap_number, pit_duration_s).
 
-    Estrategia primaria: compara el timestamp del pit con el rango de tiempo
+    Estrategia primaria: usa directamente lap_number reportado por OpenF1 si está presente.
+    Estrategia secundaria: compara el timestamp del pit con el rango de tiempo
     de la vuelta (LapStartTime + LapTime de FastF1).
-
     Fallback: si no hay timestamps usables, detecta el cambio de stint en
     las vueltas — el pit ocurrió al final de la última vuelta del stint anterior.
     """
@@ -867,20 +868,32 @@ def _map_pits_to_laps(laps_df: pd.DataFrame,
         return _empty(cols)
 
     keys = ["season", "round", "driver_code"]
+    results = []
 
-    # --- Preparar laps con timestamps de inicio y fin de vuelta ---
+    # 1. Estrategia primaria: lap_number directo de OpenF1
+    if "lap_number" in pits_raw.columns and pits_raw["lap_number"].notna().any():
+        pits_valid = pits_raw.dropna(subset=["lap_number"]).copy()
+        pits_valid["lap_number"] = pits_valid["lap_number"].astype(int)
+        for _, row in pits_valid.iterrows():
+            results.append({
+                "season": row["season"],
+                "round": row["round"],
+                "driver_code": row["driver_code"],
+                "lap_number": int(row["lap_number"]),
+                "pit_duration_s": row["pit_duration_s"],
+            })
+        out = pd.DataFrame(results)
+        out["lap_number"] = out["lap_number"].astype(int)
+        return out[cols]
+
+    # 2. Estrategia secundaria: por timestamps
     laps = laps_df.copy()
-    has_lap_start = "lap_start_time" in laps.columns or "LapStartTime" in laps.columns
     lap_start_col = "lap_start_time" if "lap_start_time" in laps.columns else (
         "LapStartTime" if "LapStartTime" in laps.columns else None
     )
 
-    results = []
-
     if lap_start_col and pits_raw["date"].notna().any():
-        # --- Estrategia primaria: por timestamp ---
-        laps["_lap_start_ts"] = pd.to_datetime(laps[lap_start_col], utc=True,
-                                                errors="coerce")
+        laps["_lap_start_ts"] = pd.to_datetime(laps[lap_start_col], utc=True, errors="coerce")
         laps_lap_time = laps["lap_time_s"] if "lap_time_s" in laps.columns else pd.Series(dtype="float64", index=laps.index)
         laps["_lap_time_s"] = pd.to_numeric(laps_lap_time, errors="coerce")
         laps["_lap_end_ts"] = laps["_lap_start_ts"] + pd.to_timedelta(
@@ -900,7 +913,6 @@ def _map_pits_to_laps(laps_df: pd.DataFrame,
             grp_laps = grp_laps.dropna(subset=["_lap_start_ts", "_lap_end_ts"])
             for _, pit_row in grp_pits.iterrows():
                 t = pit_row["date"]
-                # Buscar la vuelta cuyo rango de tiempo envuelve el pit
                 mask = (grp_laps["_lap_start_ts"] <= t) & (t <= grp_laps["_lap_end_ts"])
                 matched = grp_laps[mask]
                 if not matched.empty:
@@ -912,10 +924,9 @@ def _map_pits_to_laps(laps_df: pd.DataFrame,
                         "pit_duration_s": pit_row["pit_duration_s"],
                     })
     else:
-        # --- Fallback: cambio de stint en laps (fin del stint anterior) ---
+        # 3. Fallback: cambio de stint en laps (fin del stint anterior)
         laps_sorted = laps.sort_values(keys + ["lap_number"])
         if "stint" in laps_sorted.columns or "tyre_life" in laps_sorted.columns:
-            # Detectar vueltas donde el compuesto cambia respecto a la vuelta anterior
             stint_col = "compound" if "compound" in laps_sorted.columns else None
             if stint_col:
                 laps_sorted["_compound_shifted"] = laps_sorted.groupby(keys)[stint_col].shift(1)
@@ -925,12 +936,11 @@ def _map_pits_to_laps(laps_df: pd.DataFrame,
                     (laps_sorted[stint_col] != laps_sorted["_compound_shifted"])
                 ]
                 for _, row in pit_laps.iterrows():
-                    # La parada ocurrió en la vuelta de transición
                     results.append({
                         "season": row["season"], "round": row["round"],
                         "driver_code": row["driver_code"],
                         "lap_number": int(row["lap_number"]),
-                        "pit_duration_s": float("nan"),  # sin duración exacta
+                        "pit_duration_s": float("nan"),
                     })
 
     if not results:
