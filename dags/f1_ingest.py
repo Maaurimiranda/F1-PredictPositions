@@ -17,8 +17,9 @@ siguiendo el modelo medallón en dos capas más una capa de columnas objetivo.
 
 * **Columnas objetivo** (`build_objective_columns`) — extiende Silver con
   snapshots por punto de corte (0%, 25%, 50%, 75%, 100% de vueltas completadas).
-  Cada snapshot calcula el tiempo acumulado al corte (vueltas + pit stops) y
-  el target `total_race_time_s` (tiempo total de carrera por piloto).
+  Cada snapshot congela las features al momento del corte. El target es
+  `finish_position` (posición oficial FIA, sin nulos). `total_race_time_s` se
+  incluye como columna auxiliar para el análisis del EDA (Sección 1.2).
 
 La separación no es decorativa. Si aparece un bug en el parseo, se corrige
 Silver y se reprocesa el bronce que ya está en disco, sin volver a llamar a
@@ -195,8 +196,9 @@ def f1_ingest():
         """Genera el Silver D: snapshots de predicción en 5 puntos de corte.
 
         Para cada piloto-carrera produce 5 filas (0%, 25%, 50%, 75%, 100% de la
-        carrera), con features al momento del corte y el target total_race_time_s
-        (suma de tiempos de vuelta + pit stops).
+        carrera), con features al momento del corte. El target es `finish_position`
+        (posición oficial FIA, sin nulos). Se incluye `total_race_time_s` como
+        auxiliar para el análisis EDA de la Sección 1.2 del notebook.
         """
         from f1.silver_builder import build_race_snapshots
         dag_run = context["dag_run"]
@@ -236,13 +238,23 @@ def f1_ingest():
         else:
             log.info("2. Exactamente 5 snapshots por piloto-carrera OK")
 
-        # 3. Target presente en al menos algunos clasificados
-        if "total_race_time_s" not in df.columns:
-            raise ValueError("Falta la columna target 'total_race_time_s'.")
-        n_target = df["total_race_time_s"].notna().sum()
-        if n_target == 0:
-            raise ValueError("'total_race_time_s' está 100%% vacío.")
-        log.info("3. Target total_race_time_s: %s valores no nulos", n_target)
+        # 3. Target finish_position: presente, sin nulos
+        if "finish_position" not in df.columns:
+            raise ValueError("Falta la columna target 'finish_position'.")
+        n_target_nulos = df["finish_position"].isna().sum()
+        if n_target_nulos > 0:
+            raise ValueError(
+                f"'finish_position' tiene {n_target_nulos} nulos — "
+                "el target no puede tener valores faltantes."
+            )
+        log.info("3. Target finish_position: %s valores — sin nulos", df['finish_position'].notna().sum())
+
+        # 3b. Columna auxiliar total_race_time_s: presente (usada en EDA Sección 1.2)
+        if "total_race_time_s" in df.columns:
+            n_aux = df["total_race_time_s"].notna().sum()
+            log.info("3b. Auxiliar total_race_time_s: %s valores no nulos (DNFs esperados como NaN)", n_aux)
+        else:
+            log.warning("3b. Columna auxiliar 'total_race_time_s' no encontrada.")
 
         # 4. NaN en cutoff=0 para columnas so_far
         cutoff0 = df[df["lap_cutoff"] == 0]

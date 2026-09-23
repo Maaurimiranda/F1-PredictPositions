@@ -11,7 +11,9 @@ y en el DAG — si se agrega una columna, el cambio vive en un solo lugar.
 Silver D (driver_race_snapshots):
   Una fila por (season, round, driver_code, lap_cutoff). El lap_cutoff define el
   momento de la carrera en que se "congela" la observación: 0 = pre-carrera,
-  N = durante la carrera. El target es total_race_time_s.
+  N = durante la carrera. El target es finish_position (posición oficial FIA).
+  total_race_time_s se mantiene como columna auxiliar — el EDA lo analiza para
+  justificar por qué NO es adecuado como target (Sección 1.2 del notebook).
 """
 from __future__ import annotations
 
@@ -117,11 +119,12 @@ UNIFIED_LAP_RACE_OBLIGATORIAS: list[str] = ["season", "round", "driver_code", "l
 # Clave primaria del dataset de snapshots.
 SILVER_SNAPSHOT_KEY: list[str] = ["season", "round", "driver_code", "lap_cutoff"]
 
-# Columna objetivo: tiempo total de carrera en segundos.
-# total_race_time_s = Σ lap_time_s (todas las vueltas del piloto)
-#                   + Σ pit_duration_s (todos sus pit stops)
-# NaN para pilotos que no terminaron la carrera (classified=False).
-SILVER_TARGET: str = "total_race_time_s"
+# Columna objetivo: posición oficial de llegada según la FIA (fuente: Jolpica).
+# Entero entre 1 y 22, sin nulos (la FIA asigna posición también a los DNFs).
+# La predicción se hace desde el snapshot al 75% de la carrera (pct_race_complete=0.75).
+# total_race_time_s se mantiene en el dataset como auxiliar para el análisis de
+# la Sección 1.2 del EDA, pero NO es el target del modelo.
+SILVER_TARGET: str = "finish_position"
 
 # Orden canónico de columnas del dataset de snapshots.
 SNAPSHOT_COLUMNS: list[str] = [
@@ -148,10 +151,10 @@ SNAPSHOT_COLUMNS: list[str] = [
     "pit_time_so_far_s",      # tiempo total en boxes hasta el corte
     "compound_at_cutoff",     # compuesto de neumático en uso al corte
     # --- Target ---
-    "total_race_time_s",      # Σ lap times completos + Σ pit durations (target)
+    "finish_position",        # posición oficial FIA (1-22), sin nulos — TARGET del modelo
+    # --- Auxiliares de resultado (no usar como features; leaky post-carrera) ---
+    "total_race_time_s",      # Σ lap_time_s clasificados; auxiliar para análisis EDA 1.2
     "pit_time_available",     # True si hay datos de pit de OpenF1 para esta carrera
-    # --- Referencia (no usar como target) ---
-    "finish_position",        # posición de llegada Jolpica (1-20), solo referencia
     "classified", "points", "status",
     "laps_completed", "laps_completed_jolpica",
 ]
