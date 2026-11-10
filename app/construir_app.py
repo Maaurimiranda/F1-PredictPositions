@@ -274,12 +274,16 @@ def formula(pm, m, num, X, Xt, te, EstadoEnCarrera, final):
             avisar(f"el orden que arma la página al {ETIQUETA[m]} no coincide con el del modelo")
     # rangos que vio el modelo al entrenar (2022-2025): los deslizadores no pasan de ahí
     rangos = {c: (float(entradas_tr[c].min()), float(entradas_tr[c].max())) for c in num}
+    # para los deslizadores: del percentil 1 al 99 en las columnas con colas largas (siguen siendo valores vistos)
+    colas = {"tendencia_10", "gap_qualy_pct", "neumatico_vs_carrera"}
+    rangos_p = {c: ((float(entradas_tr[c].quantile(0.01)), float(entradas_tr[c].quantile(0.99))) if c in colas else rangos[c])
+                for c in num}
     filas = pd.DataFrame({"c": te["carrera"].to_numpy(),
                           "gp": te["race_name"].str.replace(" Grand Prix", "", regex=False).to_numpy(),
                           "piloto": te["driver_code"].to_numpy(), "nombre": te["driver_name"].to_numpy(),
                           "equipo": te["team_name"].to_numpy(), "real": te["finish_position"].to_numpy(),
                           "esp_sk": np.round(sk, 6), **{c: entradas_te[c].round(6).to_numpy() for c in num}})
-    return {"tipo": tipo, "expr": expr, "rangos": rangos, "filas": filas, "columnas": num, "terminos": terminos}
+    return {"tipo": tipo, "expr": expr, "rangos": rangos, "rangos_p": rangos_p, "filas": filas, "columnas": num, "terminos": terminos}
 
 
 
@@ -657,7 +661,7 @@ def g_tabla(res):
 
 ENTRADA = {  # cómo se muestra cada entrada del modelo en los deslizadores de «Probá el modelo»
     "posicion_al_corte": ("Dónde va (puesto)", 1, None),
-    "vueltas_detras": ("Vueltas detrás del líder", 1, None),
+    "vueltas_detras": ("Vueltas detrás del líder (3 o más: ya abandonó)", 1, None),
     "tendencia_10": ("Puestos ganados en las últimas 10 vueltas", 1, None),
     "gap_qualy_pct": ("Qué tan lejos de la pole quedó en la qualy (%)", 0.1, None),
     "log_puntos_equipo": ("Puntos del equipo antes de la carrera", 1, "log"),
@@ -940,6 +944,7 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   </div>
   <p class="modelo-usado" id="p-modelo"></p>
   <p class="titular" id="p-titular"></p>
+  <p class="nota" id="p-nota"></p>
   <div class="proba">
     <div class="col-lista"><div class="col-tit">Cómo va la carrera <small id="p-ayuda">arrastrá para reordenar</small></div>
       <ol class="lista" id="p-lista"></ol></div>
@@ -1011,6 +1016,7 @@ const pantalla = (k, c, v) => PR.momentos[k].log.includes(c) ? Math.expm1(v) : v
 const modelo = (k, c, v) => PR.momentos[k].log.includes(c) ? Math.log1p(v) : v;
 
 function cargar() {
+  nota("");
   const filas = PR.momentos[est.k].carreras[est.c];
   est.orden = filas.map(f => f.p);
   est.vals = Object.fromEntries(filas.map(f => [f.p, Object.assign({}, f.x)]));
@@ -1042,7 +1048,14 @@ function dibujarLista() {
 function editor(p) {
   const M = PR.momentos[est.k], caja = document.createElement("div");
   caja.className = "vars";
-  const cols = M.cols.filter(c => c !== "posicion_al_corte");
+  const cols = M.cols.filter(c => c !== "posicion_al_corte" && c !== "driver_standing_before");
+  if (M.cols.includes("driver_standing_before")) {
+    const info = document.createElement("div");
+    info.className = "var";
+    info.innerHTML = `<label>Puesto en el campeonato antes de la carrera<output>P${Math.round(est.vals[p].driver_standing_before)}</output></label>` +
+      `<span class="rango">Sale de los puntos: al cambiarlos, se reordena el campeonato de todos los pilotos de la carrera.</span>`;
+    caja.appendChild(info);
+  }
   if (!cols.length) caja.innerHTML = "<span class='rango'>En este momento el modelo sólo usa la posición: cambiala arrastrando.</span>";
   for (const c of cols) {
     const [lo, hi, paso] = M.rangos[c], real = pantalla(est.k, c, est.reales[p].x[c]);
@@ -1053,7 +1066,8 @@ function editor(p) {
       <input type="range" min="${lo}" max="${hi}" step="${paso}" value="${v}"><span class="rango">de ${num(lo, d)} a ${num(hi, d)} · real: ${num(real, d)}</span>` +
       (real < lo || real > hi ? `<div class="fuera">⚠ El valor real (${num(real, d)}) está fuera de lo que vio el modelo al entrenar; el deslizador llega hasta ${num(real < lo ? lo : hi, d)}.</div>` : "");
     const inp = div.querySelector("input"), out = div.querySelector("output");
-    inp.addEventListener("input", () => { out.textContent = num(+inp.value, d); est.vals[p][c] = modelo(est.k, c, +inp.value); actualizar(); });
+    inp.addEventListener("input", () => { out.textContent = num(+inp.value, d); cambiar(p, c, modelo(est.k, c, +inp.value)); });
+    inp.addEventListener("change", () => { if (c === "vueltas_detras" || c === "log_puntos") { dibujarLista(); actualizar(); } });
     inp.addEventListener("click", e => e.stopPropagation());
     caja.appendChild(div);
   }
@@ -1092,11 +1106,62 @@ function actualizar() {
   aviso.textContent = `⚠ El modelo entrenó con carreras de ${M.max_pos} autos: los puestos ${M.max_pos + 1} a ${n} nunca los vio, así que para esos pilotos la fórmula extrapola.`;
 }
 
+// Reglas para que la carrera siga siendo posible:
+// · la posición se ordena primero por vueltas completadas: nadie puede ir adelante de alguien con menos vueltas detrás;
+// · moverse en la lista son puestos ganados o perdidos ahora, y eso entra en «puestos ganados en las últimas 10 vueltas»;
+// · los puntos del equipo son del equipo: cambian para los dos pilotos;
+// · el puesto en el campeonato sale de ordenar a todos por sus puntos.
+const tiene = c => PR.momentos[est.k].cols.includes(c);
+const nota = t => { document.getElementById("p-nota").textContent = t || ""; };
+
+function reordenar(nuevo) {
+  const antes = est.orden;
+  if (tiene("tendencia_10")) nuevo.forEach((q, i) => { est.vals[q].tendencia_10 += antes.indexOf(q) - i; });
+  est.orden = nuevo;
+}
+
 function mover(p, destino) {
   const i = est.orden.indexOf(p);
   if (destino < 0 || destino >= est.orden.length || destino === i) return;
-  est.orden.splice(i, 1); est.orden.splice(destino, 0, p);
+  const nuevo = est.orden.filter(q => q !== p);
+  nuevo.splice(destino, 0, p);
+  reordenar(nuevo);
+  let t = "";
+  if (tiene("vueltas_detras")) {
+    const vd = q => est.vals[q].vueltas_detras, arriba = nuevo[destino - 1], abajo = nuevo[destino + 1];
+    const lo = arriba ? vd(arriba) : 0, hi = abajo ? vd(abajo) : Infinity, v = vd(p);
+    if (v < lo || v > hi) {
+      est.vals[p].vueltas_detras = Math.min(hi, Math.max(lo, v));
+      t = `Para que ${p} pueda ir P${destino + 1}, ahora tiene ${est.vals[p].vueltas_detras} vuelta(s) detrás del líder, como los que lo rodean. `;
+    }
+  }
+  if (tiene("tendencia_10")) t += `Los puestos que ganó o perdió cada piloto al moverlo se sumaron a sus «puestos ganados en las últimas 10 vueltas».`;
+  nota(t);
   dibujarLista(); actualizar();
+}
+
+function cambiar(p, c, v) {
+  if (c === "log_puntos_equipo") {           // es del equipo: los dos pilotos
+    const eq = est.reales[p].equipo;
+    est.orden.forEach(q => { if (est.reales[q].equipo === eq) est.vals[q][c] = v; });
+    nota(`Los puntos del equipo cambiaron para los dos pilotos de ${eq}.`);
+  } else est.vals[p][c] = v;
+  if (c === "log_puntos") {                  // el campeonato se reordena con los puntos
+    const orden = [...est.orden].sort((a, b) => est.vals[b].log_puntos - est.vals[a].log_puntos);
+    orden.forEach(q => { est.vals[q].driver_standing_before = 1 + orden.findIndex(r => est.vals[r].log_puntos === est.vals[q].log_puntos); });
+    nota(`${p} queda P${est.vals[p].driver_standing_before} en el campeonato con esos puntos.`);
+  }
+  if (c === "vueltas_detras") {              // lo ubica donde puede ir con esas vueltas
+    const otros = est.orden.filter(q => q !== p), vd = q => est.vals[q].vueltas_detras;
+    const a = otros.filter(q => vd(q) < v).length, b = otros.filter(q => vd(q) <= v).length;
+    const i = est.orden.indexOf(p), j = Math.min(b, Math.max(a, i));
+    if (j !== i) {
+      otros.splice(j, 0, p); reordenar(otros);
+      nota(`Con ${v} vuelta(s) detrás, ${p} no puede ir adelante de pilotos con menos vueltas: pasa al P${j + 1}.`);
+    }
+  }
+  actualizar();
+  lista.querySelectorAll("li").forEach((li, i) => { li.querySelector(".pos").textContent = "P" + (i + 1); });
 }
 // arrastrar con el mouse o el dedo (en pantallas táctiles, desde el asa ⋮⋮); un clic sin arrastrar abre el piloto
 let arr = null;
@@ -1443,7 +1508,7 @@ def pagina(R, N, hist, corr, salida):
         rangos = {}
         for col in P["columnas"]:
             paso = ENTRADA[col][1]
-            lo, hi = ((np.expm1(v) if ENTRADA[col][2] == "log" else v) for v in P["rangos"][col])
+            lo, hi = ((np.expm1(v) if ENTRADA[col][2] == "log" else v) for v in P["rangos_p"][col])
             rangos[col] = [round(float(np.floor(lo / paso + 1e-9) * paso), 2), round(float(np.ceil(hi / paso - 1e-9) * paso), 2), paso]
         carreras = {}
         for c, t in P["filas"].groupby("c"):
