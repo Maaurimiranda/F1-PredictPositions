@@ -1,9 +1,10 @@
 """
 ### Pipeline de datos F1 — Ciencia de Datos, UTN FRM 2026
 
-Construye el dataset de carreras de Fórmula 1 para predecir el Top 10
-en cualquier momento de la carrera (pre-carrera, durante o al final),
-siguiendo el modelo medallón en dos capas más una capa de columnas objetivo.
+Construye el dataset de carreras de Fórmula 1 para predecir la posición de
+llegada de cada piloto en cuatro momentos de la carrera (antes de largar y al
+25, 50 y 75 %), siguiendo el modelo medallón en dos capas más una capa de
+columnas objetivo.
 
 **Dos capas + columnas objetivo:**
 
@@ -17,7 +18,9 @@ siguiendo el modelo medallón en dos capas más una capa de columnas objetivo.
 
 * **Columnas objetivo** (`build_objective_columns`) — extiende Silver con
   snapshots por punto de corte (0%, 25%, 50%, 75%, 100% de vueltas completadas).
-  Cada snapshot congela las features al momento del corte. El target es
+  Cada snapshot congela el estado de cada piloto al cerrar la vuelta de corte
+  (posición, vueltas, neumáticos, ritmo), sacado sólo de las vueltas anteriores.
+  Los modelos predicen en 0-75 %; el 100 % queda como control. El target es
   `finish_position` (posición oficial FIA, sin nulos). `total_race_time_s` se
   incluye como columna auxiliar para el análisis del EDA (Sección 1.2).
 
@@ -196,7 +199,8 @@ def f1_ingest():
         """Genera el Silver D: snapshots de predicción en 5 puntos de corte.
 
         Para cada piloto-carrera produce 5 filas (0%, 25%, 50%, 75%, 100% de la
-        carrera), con features al momento del corte. El target es `finish_position`
+        carrera), con el estado al momento del corte. Los modelos predicen en
+        0-75 %; el 100 % queda como control. El target es `finish_position`
         (posición oficial FIA, sin nulos). Se incluye `total_race_time_s` como
         auxiliar para el análisis EDA de la Sección 1.2 del notebook.
         """
@@ -211,61 +215,16 @@ def f1_ingest():
 
     @task
     def validate_objective_columns(ruta: str, **context) -> str:
+        """Chequea el Silver D. Los chequeos viven en silver_builder.validate_snapshot_dataset:
+        clave única, 5 snapshots por piloto-carrera, obligatorias sin nulos, columnas de los
+        modelos presentes, current_position = 1..N en cada carrera y corte, nada posterior al
+        corte y el control al 100 % (posición al corte == finish_position)."""
         import pandas as pd
+        from f1.silver_builder import validate_snapshot_dataset
         mode = context["params"].get("mode", "full")
         log.info("Validando columnas objetivo desde %s (modo %s)", ruta, mode)
         df = pd.read_csv(ruta)
-
-        # 1. Clave sin duplicados
-        key_cols = ["season", "round", "driver_code", "lap_cutoff"]
-        faltantes = [c for c in key_cols if c not in df.columns]
-        if faltantes:
-            raise ValueError(f"Faltan columnas de la clave primaria: {faltantes}")
-        dup_count = int(df.duplicated(subset=key_cols).sum())
-        if dup_count:
-            raise ValueError(
-                f"Clave duplicada en snapshots: {dup_count} filas repetidas sobre {key_cols}."
-            )
-        log.info("1. Clave única OK: %s", key_cols)
-
-        # 2. Exactamente 5 snapshots por piloto-carrera
-        counts = df.groupby(["season", "round", "driver_code"])["lap_cutoff"].nunique()
-        wrong = counts[counts != 5]
-        if not wrong.empty:
-            log.warning(
-                "2. Pilotos-carrera sin exactamente 5 snapshots: %s casos", len(wrong)
-            )
-        else:
-            log.info("2. Exactamente 5 snapshots por piloto-carrera OK")
-
-        # 3. Target finish_position: presente, sin nulos
-        if "finish_position" not in df.columns:
-            raise ValueError("Falta la columna target 'finish_position'.")
-        n_target_nulos = df["finish_position"].isna().sum()
-        if n_target_nulos > 0:
-            raise ValueError(
-                f"'finish_position' tiene {n_target_nulos} nulos — "
-                "el target no puede tener valores faltantes."
-            )
-        log.info("3. Target finish_position: %s valores — sin nulos", df['finish_position'].notna().sum())
-
-        # 3b. Columna auxiliar total_race_time_s: presente (usada en EDA Sección 1.2)
-        if "total_race_time_s" in df.columns:
-            n_aux = df["total_race_time_s"].notna().sum()
-            log.info("3b. Auxiliar total_race_time_s: %s valores no nulos (DNFs esperados como NaN)", n_aux)
-        else:
-            log.warning("3b. Columna auxiliar 'total_race_time_s' no encontrada.")
-
-        # 4. NaN en cutoff=0 para columnas so_far
-        cutoff0 = df[df["lap_cutoff"] == 0]
-        so_far_cols = ["cumulative_time_s", "avg_lap_time_s_so_far", "current_position"]
-        for col in so_far_cols:
-            if col in df.columns and cutoff0[col].notna().any():
-                log.warning(
-                    "4. Columna '%s' tiene valores no-NaN para lap_cutoff=0 — revisar.", col
-                )
-        log.info("4. Columnas so_far OK para cutoff=0")
-
+        validate_snapshot_dataset(df)
         log.info("Validación columnas objetivo EXITOSA: %s filas x %s columnas",
                  len(df), df.shape[1])
         return "Validación Columnas Objetivo: OK"

@@ -1,0 +1,7 @@
+# Las mismas versiones con las que corrió el notebook de modelado: con otras, los números pueden moverse en el tercer decimal
+scikit-learn==1.6.1
+pandas==2.2.3
+numpy==2.1.3
+altair==5.5.0
+matplotlib
+gdown

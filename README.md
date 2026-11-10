@@ -1,12 +1,12 @@
 # F1-PredictPositions
 
-Pipeline de datos de Fórmula 1 para predecir, **antes del inicio de cada carrera**, el ranking del Top 10.
+Pipeline de datos de Fórmula 1 para predecir la **posición de llegada** de cada piloto en cuatro momentos de la carrera: antes de largar y al 25, 50 y 75 %.
 
 ## Pregunta de investigación
 
-> ¿Es posible predecir, antes del inicio de una carrera de F1, el ranking final de los diez primeros pilotos usando exclusivamente información disponible antes de la carrera?
+> ¿Dónde termina un piloto? Predecir `finish_position` (la posición oficial de llegada) en cuatro momentos de cada carrera —antes de largar y cuando el líder completa el 25, el 50 y el 75 % de las vueltas— usando sólo lo que se sabe hasta ese momento.
 
-**Unidad de análisis:** una fila = un piloto en una carrera (`season × round × driver_id`).
+**Unidad de análisis:** una fila = un piloto en una carrera en un momento (`season × round × driver_code × lap_cutoff`), en el Silver D (`driver_race_snapshots_YYYY-MM-DD.csv`). Hay un modelo por momento.
 
 ## Fuentes de datos
 
@@ -42,7 +42,78 @@ API (Jolpica / FastF1 / OpenF1)
 
 El DAG de Airflow (`dags/f1_ingest.py`) orquesta el pipeline completo siguiendo el modelo medallón:
 - **Bronze**: `ingest_jolpica`, `ingest_openf1`, `ingest_fastf1` → `verificar_bronze`
-- **Silver**: `build_silver_race`, `build_silver_laps` → `validate_silver_race`, `validate_silver_laps`
+- **Silver A y B**: `build_silver_race`, `build_silver_laps` → `validate_silver_race`, `validate_silver_laps`
+- **Silver C** (vueltas con contexto de carrera): `build_unified_silver` → `validate_unified_silver`
+- **Silver D** (snapshots con el target): `build_objective_columns` → `validate_objective_columns`
+
+## Silver D: el estado de cada piloto en cada momento
+
+Cinco filas por piloto y carrera: antes de largar (`lap_cutoff = 0`) y al cerrar la vuelta del 25, 50, 75 y 100 % de la carrera. Los modelos predicen en los cuatro primeros; el 100 % queda como control. Todo lo "al corte" sale sólo de las vueltas `<= lap_cutoff` (`tests/test_snapshots.py` lo verifica).
+
+| Columna en el pipeline | Nombre en el notebook | Qué es |
+|---|---|---|
+| `current_position` | `posicion_al_corte` | Puesto al corte (1..N en cada carrera). Antes de largar, el orden de largada: los que salen de boxes van al fondo y los empates se resuelven por la qualy. Durante la carrera, primero los que completaron más vueltas y, a igualdad, la posición de timing de FastF1 en su última vuelta |
+| `laps_done_at_cutoff` | `ultima_vuelta` | Vueltas completadas al corte |
+| `timing_position_at_cutoff` | `posicion_timing` | Posición de timing (`lap_position`) en su última vuelta |
+| `position_10_laps_before` | `pos_hace_10` | Posición de timing diez vueltas antes del corte |
+| `tyre_life_at_cutoff` | `vueltas_neumatico` | Edad del neumático al corte |
+| `tyre_changes_so_far` | `paradas_al_corte` | Cambios de neumático. Sale de las vueltas, así que cubre todas las temporadas (las paradas de OpenF1 empiezan en 2023) |
+| `dry_compounds_so_far` | `compuestos_secos` | Compuestos de seco distintos usados (SOFT, MEDIUM, HARD) |
+| `used_wet_tyres_so_far` | `uso_lluvia` | Usó intermedios o de lluvia |
+| `pace_last_5_laps_s` | `ritmo_5` | Mediana del tiempo de vuelta en las 5 vueltas que terminan en el corte |
+| `laps_without_time_so_far` | `vueltas_sin_tiempo` | Vueltas sin tiempo registrado hasta el corte |
+
+`schema.NOMBRES_NOTEBOOK` tiene esta equivalencia: `snapshots.rename(columns=NOMBRES_NOTEBOOK)` deja el snapshot con los nombres que esperan los modelos de la Entrega 3. `schema.MODEL_INPUT_COLUMNS` lista las columnas que leen esos modelos.
+
+Cuidado con dos columnas:
+- `cumulative_time_s` sigue en el snapshot, pero **no sirve para ordenar**: las vueltas sin tiempo no suman, y quien tiene alguna aparece adelante.
+- `laps_total` es **fuga**: son las vueltas que completó el piloto en toda la carrera, no el largo de la carrera. Está en `schema.LEAKY_COLS`, junto con todas las columnas de carrera completa, que son fuga en cualquier momento.
+
+**Control al 100 %:** al cerrar la última vuelta, `current_position` coincide con `finish_position` en el 85 % de las filas de 2022-2026. Las diferencias son penalizaciones post-carrera y descalificaciones. Con el orden anterior por `cumulative_time_s` coincidía en el 66 %. `validate_objective_columns` avisa si baja del 80 %.
+
+## Cambios para la Entrega 3
+
+- **`current_position` corregida.** Antes se ordenaba por `cumulative_time_s`. Ahora usa las vueltas completadas y la posición de timing (y antes de largar, la grilla). Los empates se resuelven por `driver_code`, explícitamente: el Silver A viene ordenado por `finish_position`, y desempatar por el orden de las filas metería el resultado en la posición.
+- **Columnas nuevas de estado al corte** (tabla de arriba): las mismas que calcula el notebook de modelado. Con los CSV del 23/09 dan exactamente lo mismo que el notebook en los cinco momentos.
+- **`laps_total` pasa a fuga**, y `schema.LEAKY_COLS` aclara que las columnas de carrera completa son fuga en cualquier momento, no sólo antes de largar.
+- **Validación del Silver D** en `silver_builder.validate_snapshot_dataset`, con chequeos nuevos: columnas de los modelos presentes, `current_position` = 1..N en cada carrera y corte, nada posterior al corte y el control al 100 %.
+- **Tests sin Airflow** en `tests/test_snapshots.py` (vueltas sin tiempo, orden de largada, empates, nada posterior al corte, neumáticos): `astro dev pytest`, o `pytest tests/test_snapshots.py` con `pandas` y `pytest` instalados.
+
+## La aplicación (Entrega 4)
+
+La versión final del proyecto es una página web: **https://maaurimiranda.github.io/f1-predictpositions/** (GitHub Pages, carpeta `docs/`).
+Cuenta el proyecto en orden (portada, los datos, lo que encontramos, el modelo) y después deja explorar las predicciones y probar el modelo con un caso propio.
+
+### Cómo se regenera
+
+```bash
+pip install -r app/requirements.txt
+python app/construir_app.py --datos include/output/silver      # carpeta con los dos CSV de la corrida
+```
+
+`app/construir_app.py`:
+
+1. Ejecuta, sin copiarlas, las celdas del notebook `include/Entrega3_Modelado_F1.ipynb` que leen los CSV, rehacen la posición al corte, separan 2022–2025 / 2026 y definen el pipeline (`EstadoEnCarrera`, `Llegada`, `medir`). Si los CSV no están, el notebook los baja de Drive.
+2. Arma los modelos que eligió el notebook (diccionario `DECISIONES`), con la semilla 42, y los vuelve a medir con los mismos 5 cortes. Compara cada número con el del notebook y avisa si alguno cambió.
+3. Calcula las predicciones fuera de muestra (validación 2022–2025 y test 2026) para «Explorá» y escribe la fórmula de cada modelo como expresión de Vega para «Probá el modelo». Comprueba que la fórmula reproduce a scikit-learn en el test.
+4. Dibuja los gráficos con Altair y escribe `docs/index.html`: una sola página, con los datos adentro, que no necesita Python para correr.
+
+Si el pipeline produce datos nuevos, se vuelve a correr el script y se sube `docs/index.html`. Tarda unos 20 segundos.
+
+### Publicación
+
+En GitHub: *Settings → Pages → Build and deployment → Deploy from a branch*, rama `main`, carpeta `/docs`. Cada push que cambie `docs/index.html` actualiza la página en uno o dos minutos.
+
+### Cómo llega el modelo a la página
+
+- **Del 25 % en adelante** el modelo elegido es una regresión lineal: la página tiene escritos sus coeficientes, las medias y los desvíos del escalado, y ordena a los pilotos de la carrera 1, 2, 3… como el notebook.
+- **Antes de largar** el elegido es un boosting (2,911 ± 0,247), que no se puede escribir en la página. «Probá el modelo» usa el árbol ajustado (3,050 ± 0,243): queda a 0,139 puestos, menos de un desvío del boosting, y se escribe como preguntas encadenadas. En «Explorá» y en el tallo, los números son los del boosting.
+- En «Probá el modelo» la carrera es una lista: se reordena arrastrando a los pilotos (eso cambia su posición en ese momento) y, con un clic en un piloto, se cambian sus otros datos. La página recalcula a todos con la fórmula y muestra la tabla final que da el modelo.
+- Los deslizadores van del mínimo al máximo que vio el modelo en 2022–2025. Si el valor real de un piloto de 2026 queda afuera (por ejemplo, los puestos 21 y 22, que no existían con 20 autos), la página lo lleva al borde y avisa.
+
+### Qué cambió desde la Entrega 3
+
+- **Faltaba una métrica que mida a cada piloto en el contexto de los demás.** El MAE mide el error piloto por piloto; agregamos la comparación de la tabla completa de cada carrera contra la tabla final: correlación de Spearman entre el puesto predicho y el puesto final (carrera por carrera), y aciertos del podio y del top 10. Está en el notebook (sección 6, «La tabla completa de cada carrera»), en el «Cómo lo sabemos» del modelo, y en «Explorá», donde cada carrera se puede medir con Spearman y abrir como dos tablas lado a lado. No cambió ninguna decisión: el modelo ya estaba elegido con el MAE.
 
 ## Estructura del repositorio
 
@@ -56,11 +127,21 @@ El DAG de Airflow (`dags/f1_ingest.py`) orquesta el pipeline completo siguiendo 
 │   │   ├── openf1.py             # Cliente OpenF1 con caché + 429
 │   │   ├── fastf1_source.py      # Ingesta FastF1 (caché nativo)
 │   │   ├── bronze.py             # Orquestador de prefetch Bronze
+│   │   ├── schema.py             # Columnas de cada tabla Silver, fuga y nombres del notebook
 │   │   └── silver_builder.py     # Construcción y validación de la capa Silver
 │   └── output/                   # Datos generados (gitignored)
 │       ├── bronze/               # Datos crudos particionados por fuente/año/ronda
 │       └── silver/               # Datasets CSV fechados
 ├── include/frozen/               # Respaldo frío del último Silver exitoso
+├── include/Entrega3_Modelado_F1.ipynb  # Modelado (Entrega 3): de acá salen los modelos de la aplicación
+├── app/
+│   ├── construir_app.py          # Genera docs/index.html desde los CSV del pipeline y el notebook
+│   └── requirements.txt          # Versiones con las que coincide con el notebook
+├── docs/
+│   └── index.html                # La aplicación publicada en GitHub Pages
+├── tests/
+│   ├── dags/test_dag_integrity.py  # El DAG importa sin errores
+│   └── test_snapshots.py           # Lógica del Silver D (sin Airflow)
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -139,7 +220,8 @@ airflow dags trigger f1_ingest
 - En la UI de Airflow, todas las tareas deben terminar en **SUCCESS** (verde).
 - La tarea `verificar_bronze` loguea la cobertura de archivos por fuente.
 - En disco, `include/output/bronze/` debe tener subcarpetas `source=jolpica/`, `source=openf1/`, `source=fastf1/`.
-- En disco, `include/output/silver/` debe tener los CSV fechados: `driver_race_features_YYYY-MM-DD.csv`.
+- En disco, `include/output/silver/` debe tener los CSV fechados: `driver_race_features_YYYY-MM-DD.csv`, `driver_lap_features_...`, `driver_lap_race_features_...` y `driver_race_snapshots_...`.
+- El log de `validate_objective_columns` muestra los chequeos del Silver D, incluido el control al 100 %.
 
 ### 7. Reejecución
 
