@@ -108,11 +108,12 @@ En GitHub: *Settings → Pages → Build and deployment → Deploy from a branch
 
 - **Del 25 % en adelante** el modelo elegido es una regresión lineal: la página tiene escritos sus coeficientes, las medias y los desvíos del escalado, y ordena a los pilotos de la carrera 1, 2, 3… como el notebook.
 - **Antes de largar** el elegido es un boosting (2,911 ± 0,247), que no se puede escribir en la página. «Probá el modelo» usa el árbol ajustado (3,050 ± 0,243): queda a 0,139 puestos, menos de un desvío del boosting, y se escribe como preguntas encadenadas. En «Explorá» y en el tallo, los números son los del boosting.
+- En «Probá el modelo» la carrera es una lista: se reordena arrastrando a los pilotos (eso cambia su posición en ese momento) y, con un clic en un piloto, se cambian sus otros datos. La página recalcula a todos con la fórmula y muestra la tabla final que da el modelo.
 - Los deslizadores van del mínimo al máximo que vio el modelo en 2022–2025. Si el valor real de un piloto de 2026 queda afuera (por ejemplo, los puestos 21 y 22, que no existían con 20 autos), la página lo lleva al borde y avisa.
 
 ### Qué cambió desde la Entrega 3
 
-_(Completar con lo que marcó el docente y cómo se resolvió.)_
+- **Faltaba una métrica que mida a cada piloto en el contexto de los demás.** El MAE mide el error piloto por piloto; agregamos la comparación de la tabla completa de cada carrera contra la tabla final: correlación de Spearman entre el puesto predicho y el puesto final (carrera por carrera), y aciertos del podio y del top 10. Está en el notebook (sección 6, «La tabla completa de cada carrera»), en el «Cómo lo sabemos» del modelo, y en «Explorá», donde cada carrera se puede medir con Spearman y abrir como dos tablas lado a lado. No cambió ninguna decisión: el modelo ya estaba elegido con el MAE.
 
 ## Estructura del repositorio
 

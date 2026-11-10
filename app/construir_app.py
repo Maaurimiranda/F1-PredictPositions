@@ -161,7 +161,7 @@ def calcular(g):
         X, y, Xt, yt = D[m]["X"], D[m]["y"], D[m]["X_test"], D[m]["y_test"]
         tr, te = D[m]["train"], D[m]["test"]
 
-        def filas_explora(ajustado, idx, origen, muestra):
+        def filas_explora(ajustado, idx, origen, muestra, corte=-1):
             Xp = X.iloc[idx] if idx is not None else Xt
             esperada = ajustado.pipeline_.predict(Xp) + ajustado._base(Xp)
             final = ajustado.predict(Xp)
@@ -177,12 +177,12 @@ def calcular(g):
                 "pred": np.round(final, 2), "esp": np.round(esperada, 2), "real": o["finish_position"].to_numpy(),
                 "fin": np.where(terminó, "terminó", "abandonó"),
                 "sit": np.select([ya, terminó], ["ya había abandonado", "terminó"], "abandonó después"),
-                "muestra": muestra})
+                "muestra": muestra, "corte": corte})
 
         # validación: cada carrera validada la predice el modelo del corte que no la vio
-        for e, w in D[m]["cortes"]:
+        for i_corte, (e, w) in enumerate(D[m]["cortes"]):
             aj = clone(elegido).fit(X.iloc[e], y.iloc[e])
-            R["explora"].append(filas_explora(aj, w, tr, "validación"))
+            R["explora"].append(filas_explora(aj, w, tr, "validación", i_corte))
         # test: el modelo entrenado con 2022-2025, una vez
         final = clone(elegido).fit(X, y)
         ft = filas_explora(final, None, te, "test 2026")
@@ -253,9 +253,16 @@ def formula(pm, m, num, X, Xt, te, EstadoEnCarrera, final):
             return (f"({var[num[j]]} <= {umbral:.6f} ? {nodo(t.children_left[i])} : "
                     f"{nodo(t.children_right[i])})")
         expr = f"{var['posicion_al_corte']} + {nodo(0)}"
+
+        def a_json(i):
+            if t.children_left[i] == -1:
+                return {"v": round(float(t.value[i][0][0]), 6)}
+            j = t.feature[i]
+            return {"c": num[j], "u": float(t.threshold[i] * esc.scale_[j] + esc.mean_[j]),
+                    "l": a_json(t.children_left[i]), "r": a_json(t.children_right[i])}
         cambio = np.array([nodo(0, fila) for fila in entradas_te.to_numpy()])
         tipo = "árbol"
-        terminos = None
+        terminos = {"arbol": a_json(0)}
     esperada = entradas_te["posicion_al_corte"].to_numpy() + cambio
     sk = pm.pipeline_.predict(Xt) + pm._base(Xt)
     if not np.allclose(esperada, sk, atol=1e-6):
@@ -271,10 +278,52 @@ def formula(pm, m, num, X, Xt, te, EstadoEnCarrera, final):
                           "gp": te["race_name"].str.replace(" Grand Prix", "", regex=False).to_numpy(),
                           "piloto": te["driver_code"].to_numpy(), "nombre": te["driver_name"].to_numpy(),
                           "equipo": te["team_name"].to_numpy(), "real": te["finish_position"].to_numpy(),
-                          **{c: entradas_te[c].round(4).to_numpy() for c in num}})
+                          "esp_sk": np.round(sk, 6), **{c: entradas_te[c].round(6).to_numpy() for c in num}})
     return {"tipo": tipo, "expr": expr, "rangos": rangos, "filas": filas, "columnas": num, "terminos": terminos}
 
 
+
+
+# la tabla completa de cada carrera (notebook, sección 6): Spearman y aciertos del podio y del top 10
+DEL_NOTEBOOK_TABLA = {"spearman": {"validación": {"modelo": [0.688, 0.783, 0.859, 0.906], "regla": [0.653, 0.747, 0.844, 0.899]},
+                                   "test": {"modelo": [0.690, 0.823, 0.880, 0.914], "regla": [0.682, 0.821, 0.882, 0.918]}}}
+
+
+def tabla_de_carrera(t, col):
+    """Ordena a los pilotos de una carrera por `col` (si empatan, por dónde van) y la compara con la llegada."""
+    from scipy.stats import spearmanr
+    t = t.sort_values([col, "pos"])
+    return pd.Series({"spearman": spearmanr(np.arange(1, len(t) + 1), t["real"]).statistic,
+                      "podio": (t["real"].head(3) <= 3).mean(), "top10": (t["real"].head(10) <= 10).mean()})
+
+
+def metricas_tabla(e):
+    """Una fila por momento y carrera, con las tres métricas del modelo y de la regla; y los resúmenes por momento."""
+    filas = []
+    for (m, c), t in e.groupby(["m", "c"]):
+        mo, rg = tabla_de_carrera(t, "pred"), tabla_de_carrera(t.assign(regla=t["pos"]), "regla")
+        filas.append({"m": m, "c": c, "corte": t["corte"].iloc[0], "muestra": t["muestra"].iloc[0],
+                      **{f"{k}_m": v for k, v in mo.items()}, **{f"{k}_r": v for k, v in rg.items()}})
+    pc = pd.DataFrame(filas)
+    resumen = []
+    for i, mm in enumerate(MOMS):
+        val = pc[(pc["m"] == mm) & (pc["muestra"] == "validación")].groupby("corte").mean(numeric_only=True)
+        te = pc[(pc["m"] == mm) & (pc["muestra"] == "test 2026")]
+        fila = {"momento": mm, "mejor_test": int((te["spearman_m"] > te["spearman_r"]).sum()),
+                "igual_test": int((te["spearman_m"] == te["spearman_r"]).sum()),
+                "peor_test": int((te["spearman_m"] < te["spearman_r"]).sum())}
+        for k in ("spearman", "podio", "top10"):
+            for q in ("m", "r"):
+                fila[f"{k}_{q}_val"], fila[f"{k}_{q}_sd"] = val[f"{k}_{q}"].mean(), val[f"{k}_{q}"].std()
+                fila[f"{k}_{q}_test"] = te[f"{k}_{q}"].mean()
+            fila[f"{k}_cortes"] = int((val[f"{k}_m"] > val[f"{k}_r"]).sum())
+        for q, nombre in (("m", "modelo"), ("r", "regla")):
+            comparar(f"Spearman {nombre} en validación, {mm}", fila[f"spearman_{q}_val"],
+                     DEL_NOTEBOOK_TABLA["spearman"]["validación"][nombre][i], 0.0006)
+            comparar(f"Spearman {nombre} en test, {mm}", fila[f"spearman_{q}_test"],
+                     DEL_NOTEBOOK_TABLA["spearman"]["test"][nombre][i], 0.0006)
+        resumen.append(fila)
+    return pc, pd.DataFrame(resumen)
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 # 4. Los números del tallo que no son del modelo: los datos y el hallazgo
@@ -428,7 +477,7 @@ def g_modelo(R):
                         subtitle=["Punto: media de los 5 cortes de la validación; barra: un desvío. Rombo: las 14 carreras de 2026."]))
 
 
-def g_explora(e, inicial):
+def g_explora(e, pc, inicial):
     temps = sorted(e["temp"].unique())
     pil = (e.drop_duplicates("piloto").sort_values("nombre"))
     momento = alt.param(name="momento_e", value=inicial["m"],
@@ -439,14 +488,22 @@ def g_explora(e, inicial):
                        bind=alt.binding_select(options=["Todos"] + pil["piloto"].tolist(),
                                                labels=["Todos"] + [f"{n} ({c})" for n, c in zip(pil["nombre"], pil["piloto"])],
                                                name=" ", element="#c-piloto"))
+    medida = alt.param(name="medida_e", value="Error medio (MAE)",
+                       bind=alt.binding_radio(options=["Error medio (MAE)", "Parecido de la tabla (Spearman)"], name=" ",
+                                              element="#c-medida"))
     carrera = alt.selection_point(name="carrera_e", fields=["c"], value=[{"c": inicial["c"]}], on="click",
                                   clear=False, toggle=False)
     filtro = ("datum.m == momento_e && (temporada_e == 'Todas' || datum.temp == temporada_e) && "
               "(piloto_e == 'Todos' || datum.piloto == piloto_e)")
     errores = dict(em="abs(datum.pred - datum.real)", er="abs(datum.pos - datum.real)")
     pano = (alt.Chart(e).transform_filter(filtro).transform_calculate(**errores)
-              .transform_aggregate(modelo="mean(em)", regla="mean(er)", n="count()",
-                                   groupby=["c", "gp", "fecha", "temp", "muestra"]))
+              .transform_aggregate(mae_m="mean(em)", mae_r="mean(er)", n="count()",
+                                   groupby=["c", "m", "gp", "fecha", "temp", "muestra"])
+              .transform_calculate(k="datum.c + '|' + datum.m")
+              .transform_lookup(lookup="k", from_=alt.LookupData(pc, key="k", fields=TABLA_CAMPOS))
+              .transform_calculate(mae="medida_e == 'Error medio (MAE)'",
+                                   modelo="datum.mae ? datum.mae_m : datum.spearman_m",
+                                   regla="datum.mae ? datum.mae_r : datum.spearman_r"))
     fin_test = (pd.to_datetime(e["fecha"].max()) + pd.Timedelta(days=12)).strftime("%Y-%m-%d")
     test = pd.DataFrame({"a": ["2026-01-01"], "b": [fin_test], "t": ["test 2026"]})
     X_F = alt.X("fecha:T", title=None, axis=alt.Axis(format="%Y", tickCount="year", grid=False))
@@ -455,30 +512,49 @@ def g_explora(e, inicial):
         x="a:T", text="t:N")
     tip_p = [alt.Tooltip("gp:N", title="Carrera"), alt.Tooltip("fecha:T", title="Fecha", format="%d/%m/%Y"),
              alt.Tooltip("muestra:N", title="Predicción"), alt.Tooltip("n:Q", title="Pilotos"),
-             alt.Tooltip("modelo:Q", title="Error del modelo", format=".2f"),
-             alt.Tooltip("regla:Q", title="Error de «termina donde está»", format=".2f")]
+             alt.Tooltip("mae_m:Q", title="Error del modelo (MAE)", format=".2f"),
+             alt.Tooltip("mae_r:Q", title="Error de «termina donde está»", format=".2f"),
+             alt.Tooltip("spearman_m:Q", title="Spearman del modelo", format=".2f"),
+             alt.Tooltip("spearman_r:Q", title="Spearman de la regla", format=".2f"),
+             alt.Tooltip("podio_m:Q", title="Podio acertado (modelo)", format=".0%"),
+             alt.Tooltip("top10_m:Q", title="Top 10 acertado (modelo)", format=".0%")]
     une = pano.mark_rule(color="#d9d6cd").encode(x=X_F, y="regla:Q", y2="modelo:Q")
     regla = pano.mark_tick(color=NARANJA, thickness=2.5, size=11, opacity=0.9).encode(x=X_F, y="regla:Q", tooltip=tip_p)
     modelo = pano.mark_circle(color=AZUL, opacity=1, cursor="pointer").encode(
-        x=X_F, y=alt.Y("modelo:Q", title="Error medio (puestos)", scale=alt.Scale(zero=True)),
+        x=X_F, y=alt.Y("modelo:Q", scale=alt.Scale(zero=True), title=None),
         size=alt.condition(carrera, alt.value(190), alt.value(48)),
         stroke=alt.condition(carrera, alt.value(TINTA), alt.value(None)), strokeWidth=alt.value(2),
         tooltip=tip_p).add_params(carrera)
-    panorama = (banda + banda_t + une + regla + modelo).properties(
+    eje = alt.Chart(pd.DataFrame({"a": [1]})).transform_calculate(
+        t="medida_e == 'Error medio (MAE)' ? '↓ error medio en puestos (más abajo, mejor)' : '↑ Spearman: 1 = tabla idéntica (más arriba, mejor)'"
+    ).mark_text(align="left", baseline="top", x=4, y=2, fontSize=11.5, fontWeight=600, color="#5f5d57").encode(text="t:N")
+    panorama = (banda + banda_t + une + regla + modelo + eje).properties(
         width=760, height=210,
         title=alt.Title("Todas las carreras con predicción fuera de muestra",
-                        subtitle=["Cada punto azul es una carrera: el error medio del modelo. La raya naranja, el de «termina donde está». "
-                                  "Hacé clic en una carrera para verla abajo."]))
+                        subtitle=["Cada punto azul es una carrera, medida según «Medir cada carrera por»; la raya naranja, lo mismo para «termina donde está».",
+                                  "Hacé clic en una carrera para abrirla abajo."]))
 
     sel = alt.Chart(e).transform_filter("datum.m == momento_e").transform_filter(carrera)
-    cab = (sel.transform_calculate(**errores)
-              .transform_aggregate(modelo="mean(em)", regla="mean(er)", groupby=["gp", "temp", "muestra"])
-              .transform_calculate(t="datum.gp + ' ' + datum.temp + ' · ' + momento_e + ' · ' + datum.muestra + "
-                                     "' — error medio: modelo ' + format(datum.modelo, '.2f') + ', «termina donde está» ' + "
-                                     "format(datum.regla, '.2f')")
-              .mark_text(align="left", baseline="top", x=0, y=4, fontSize=14, fontWeight=600, color=TINTA)
-              .encode(text="t:N").properties(width=760, height=26))
-    det = sel.transform_calculate(etq="datum.piloto + ' · ' + datum.equipo",
+    cab_base = (sel.transform_calculate(**errores)
+                   .transform_aggregate(modelo="mean(em)", regla="mean(er)", groupby=["c", "m", "gp", "temp", "muestra"])
+                   .transform_calculate(k="datum.c + '|' + datum.m")
+                   .transform_lookup(lookup="k", from_=alt.LookupData(pc, key="k", fields=TABLA_CAMPOS))
+                   .transform_calculate(
+                       t="datum.gp + ' ' + datum.temp + ' · ' + momento_e + ' · ' + datum.muestra",
+                       t2="'Modelo: error medio ' + format(datum.modelo, '.2f') + ' · Spearman ' + format(datum.spearman_m, '.2f') + "
+                          "' · podio ' + round(datum.podio_m * 3) + ' de 3 · top 10 ' + round(datum.top10_m * 10) + ' de 10'",
+                       t3="'«Termina donde está»: error medio ' + format(datum.regla, '.2f') + ' · Spearman ' + "
+                          "format(datum.spearman_r, '.2f') + ' · podio ' + round(datum.podio_r * 3) + ' de 3 · top 10 ' + "
+                          "round(datum.top10_r * 10) + ' de 10'"))
+    cab = (cab_base.mark_text(align="left", baseline="top", x=0, y=2, fontSize=14, fontWeight=600, color=TINTA).encode(text="t:N")
+           + cab_base.mark_text(align="left", baseline="top", x=0, y=24, fontSize=12.5, color=AZUL).encode(text="t2:N")
+           + cab_base.mark_text(align="left", baseline="top", x=0, y=42, fontSize=12.5, color="#b35a16").encode(text="t3:N")
+           ).properties(width=760, height=60)
+    # el detalle va en dos vistas aparte (se elige con botones): reciben momento, piloto y carrera desde el panorama
+    sub = alt.Chart(e).transform_filter("datum.m == momento_e && datum.c == carrera_c")
+    libres = [alt.param(name="momento_e", value=inicial["m"]), alt.param(name="piloto_e", value="Todos"),
+              alt.param(name="carrera_c", value=inicial["c"])]
+    det = sub.transform_calculate(etq="datum.piloto + ' · ' + datum.equipo",
                                   tuyo="piloto_e != 'Todos' && datum.piloto == piloto_e",
                                   error="abs(datum.pred - datum.real)")
     Y_D = alt.Y("etq:N", sort=alt.EncodingSortField("real", order="ascending"), title=None,
@@ -502,7 +578,81 @@ def g_explora(e, inicial):
         shape=alt.Shape("fin:N", scale=alt.Scale(domain=["terminó", "abandonó"], range=["diamond", "cross"]), legend=None),
         color=alt.Color("fin:N", scale=alt.Scale(domain=["terminó", "abandonó"], range=[TINTA, VINO]), legend=None))
     detalle = (resalte + mov + iba + dijo + real).properties(width=760, height=alt.Step(19))
-    return alt.vconcat(panorama, cab, detalle, spacing=14).add_params(momento, temporada, piloto)
+    tablas = g_dos_tablas(sub, "pred", "piloto_e != 'Todos' && datum.piloto == piloto_e",
+                          tip_d, "Tabla que armó el modelo", "Tabla final")
+    return {"panorama": alt.vconcat(panorama, cab, spacing=14).add_params(momento, temporada, piloto, medida),
+            "tablas": tablas.add_params(*libres), "detalle": alt.vconcat(detalle).add_params(*libres)}
+
+
+TABLA_CAMPOS = ["spearman_m", "spearman_r", "podio_m", "podio_r", "top10_m", "top10_r"]
+
+
+def g_dos_tablas(sel, col_pred, tuyo, tip, izq, der, real="real", alto=21):
+    """Dos columnas de puestos unidas por una línea por piloto: la tabla que arma una predicción y la de llegada."""
+    t = (sel.transform_window(pp="row_number()", sort=[alt.SortField(col_pred), alt.SortField("pos")])
+            .transform_calculate(dif=f"abs(datum.pp - datum.{real})", tuyo=tuyo,
+                                 grupo=("datum.fin == 'abandonó' ? 'abandonó' : datum.dif <= 1 ? 'acertó o erró por 1' : "
+                                        "datum.dif <= 4 ? 'erró por 2 a 4' : 'erró por 5 o más'"),
+                                 izq="'P' + datum.pp + '  ' + datum.piloto", der=f"datum.piloto + '  P' + datum.{real}"))
+    Y = dict(scale=alt.Scale(domain=[0.5, 22.5], reverse=True, nice=False, zero=False), axis=None, title=None)
+    X = alt.Scale(domain=[-0.42, 1.42], nice=False, zero=False)
+    grupos = ["acertó o erró por 1", "erró por 2 a 4", "erró por 5 o más", "abandonó"]
+    zonas = alt.Chart(pd.DataFrame({"a": [0.5, 3.5], "b": [3.5, 10.5], "t": ["podio", "zona de puntos (top 10)"],
+                                    "c": ["#fdf0c4", "#f4f2ec"], "y": [2, 7]}))
+    capas = [*[zonas.transform_filter(f"datum.c == '{col}'").mark_rect(color=col).encode(
+                 y=alt.Y("a:Q", **Y), y2="b:Q", x=alt.X(datum=-0.42, scale=X, axis=None, title=None), x2=alt.X2(datum=1.42))
+               for col in ("#fdf0c4", "#f4f2ec")],
+             zonas.mark_text(fontSize=10.5, color="#8a877f").encode(y=alt.Y("y:Q", **Y), x=alt.X(datum=0.5, scale=X, axis=None, title=None), text="t:N"),
+             t.mark_rule(strokeCap="round").encode(
+                 x=alt.X(datum=0, scale=X, axis=None, title=None), x2=alt.X2(datum=1), y=alt.Y("pp:Q", **Y), y2=f"{real}:Q",
+                 color=alt.Color("grupo:N", scale=alt.Scale(domain=grupos, range=["#b9b6ab", "#7b8db0", TINTA, VINO]),
+                                 legend=alt.Legend(title=None, orient="bottom", direction="horizontal")),
+                 strokeWidth=alt.condition("datum.tuyo", alt.value(5), alt.value(2.2)),
+                 strokeDash=alt.condition("datum.fin == 'abandonó'", alt.value([5, 3]), alt.value([1, 0])), tooltip=tip),
+             *[t.transform_filter(fl).mark_text(align="right", dx=-8, fontSize=12, fontWeight=w).encode(
+                 x=alt.X(datum=0, scale=X, axis=None, title=None), y=alt.Y("pp:Q", **Y), text="izq:N", tooltip=tip)
+                   for fl, w in (("datum.tuyo", 800), ("!datum.tuyo", 400))],
+             *[t.transform_filter(fl).mark_text(align="left", dx=8, fontSize=12, fontWeight=w).encode(
+                 x=alt.X(datum=1, scale=X, axis=None, title=None), y=alt.Y(f"{real}:Q", **Y), text="der:N", tooltip=tip)
+                   for fl, w in (("datum.tuyo", 800), ("!datum.tuyo", 400))]]
+    tit = alt.Chart(pd.DataFrame({"x": [0, 1], "t": [izq, der]})).mark_text(fontSize=12.5, fontWeight=700, dy=-12).encode(
+        x=alt.X("x:Q", scale=X, axis=None, title=None), y=alt.value(0), text="t:N")
+    return alt.layer(*capas, tit).properties(width=560, height=22 * alto)
+
+
+
+def g_tabla(res):
+    """Spearman, podio y top 10 por momento: modelo contra regla, validación (± un desvío) y test."""
+    filas = []
+    for _, r in res.iterrows():
+        for k, tit in [("spearman", "Spearman"), ("podio", "Aciertos del podio"), ("top10", "Aciertos del top 10")]:
+            for q, quien in [("r", "«termina donde está»"), ("m", "modelo")]:
+                v, sd = r[f"{k}_{q}_val"], r[f"{k}_{q}_sd"]
+                filas.append({"panel": tit, "momento": r["momento"], "quien": quien, "muestra": "validación 2022–2025",
+                              "v": v, "lo": v - sd, "hi": v + sd})
+                filas.append({"panel": tit, "momento": r["momento"], "quien": quien, "muestra": "test 2026",
+                              "v": r[f"{k}_{q}_test"], "lo": None, "hi": None})
+    df = pd.DataFrame(filas)
+    quienes = ["«termina donde está»", "modelo"]
+    paneles = []
+    for i, tit in enumerate(["Spearman", "Aciertos del podio", "Aciertos del top 10"]):
+        base = alt.Chart(df).transform_filter(f"datum.panel == '{tit}'").encode(
+            x=alt.X("momento:N", sort=MOMS, title=None, axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+            xOffset=alt.XOffset("quien:N", sort=quienes),
+            color=alt.Color("quien:N", scale=alt.Scale(domain=quienes, range=[NARANJA, AZUL]),
+                            legend=alt.Legend(title=None, orient="top") if i == 0 else None))
+        tip = [alt.Tooltip("quien:N", title="Quién"), alt.Tooltip("momento:N", title="Momento"),
+               alt.Tooltip("muestra:N", title="Dónde"), alt.Tooltip("v:Q", title=tit, format=".3f")]
+        val = base.transform_filter("datum.muestra == 'validación 2022–2025'")
+        Y = alt.Y("v:Q", scale=alt.Scale(domain=[0.5, 1.0]), title=None, axis=alt.Axis(format=".2f"))
+        paneles.append((val.mark_rule(strokeWidth=2).encode(y=alt.Y("lo:Q", scale=alt.Scale(domain=[0.5, 1.0])), y2="hi:Q")
+                        + val.mark_circle(size=80, opacity=1).encode(y=Y, tooltip=tip)
+                        + base.transform_filter("datum.muestra == 'test 2026'").mark_point(
+                            shape="diamond", filled=False, size=80, strokeWidth=2).encode(y=Y, tooltip=tip))
+                       .properties(width=230, height=230, title=tit))
+    return alt.hconcat(*paneles, spacing=18).properties(
+        title=alt.Title("La tabla completa de cada carrera, comparada con la final (más arriba, mejor)",
+                        subtitle=["Punto: media de los 5 cortes de la validación, con un desvío. Rombo: promedio de las 14 carreras de 2026."]))
 
 
 ENTRADA = {  # cómo se muestra cada entrada del modelo en los deslizadores de «Probá el modelo»
@@ -525,124 +675,51 @@ def a_pantalla(col, v):
     return round(round(float(x) / paso) * paso, 2)
 
 
-def piloto_inicial(R, c):
-    """Un piloto de mitad de pelotón cuyos valores reales caen, en los cuatro momentos, dentro de lo que vio el modelo."""
-    t = R["proba"][0.25]["filas"]
-    for p in t[t["c"] == c].sort_values("posicion_al_corte")["piloto"]:
-        dentro = all(lo <= fila[col] <= hi for P in R["proba"].values()
-                     for _, fila in P["filas"][(P["filas"]["c"] == c) & (P["filas"]["piloto"] == p)].iterrows()
-                     for col, (lo, hi) in P["rangos"].items())
-        pos = t[(t["c"] == c) & (t["piloto"] == p)]["posicion_al_corte"].iloc[0]
-        if dentro and 6 <= pos <= 12:
-            return p
-    return t[t["c"] == c]["piloto"].iloc[0]
 
-
-def g_proba(m, P, inicial):
-    cols, filas = P["columnas"], P["filas"]
-    k = CORTO[m]
-    ini = filas[(filas["c"] == inicial["c"]) & (filas["piloto"] == inicial["piloto"])].iloc[0]
-    params = [alt.param(name=f"carrera_{k}", value=inicial["c"]), alt.param(name=f"piloto_{k}", value=inicial["piloto"])]
-    libres = [alt.param(name=f"carrera_{k}", value=inicial["c"]), alt.param(name=f"piloto_{k}", value=inicial["piloto"])]
-    calc = {}
-    for col in cols:
-        paso = ENTRADA[col][1]
-        lo, hi = ((np.expm1(v) if ENTRADA[col][2] == "log" else v) for v in P["rangos"][col])
-        lo, hi = np.floor(lo / paso + 1e-9) * paso, np.ceil(hi / paso - 1e-9) * paso
-        P["rangos_pantalla"] = P.get("rangos_pantalla", {}) | {col: (round(float(lo), 2), round(float(hi), 2), paso)}
-        params.append(alt.param(name=f"s{k}_{col}", value=round(float(a_pantalla(col, ini[col])), 2),
-                                bind=alt.binding_range(min=float(lo), max=float(hi), step=paso, name=" ",
-                                                       element=f"#d{k}-{col}")))
-        libres.append(alt.param(name=f"s{k}_{col}", value=round(float(a_pantalla(col, ini[col])), 2)))
-        valor = f"log(1 + s{k}_{col})" if ENTRADA[col][2] == "log" else f"s{k}_{col}"
-        calc[f"x_{col}"] = f"datum.piloto == piloto_{k} ? {valor} : datum.{col}"
-    base = (alt.Chart(filas).transform_filter(f"datum.c == carrera_{k}").transform_calculate(**calc)
-              .transform_calculate(esp=P["expr"], tuyo=f"datum.piloto == piloto_{k}")
-              .transform_window(orden="row_number()", sort=[alt.SortField("esp"), alt.SortField("x_posicion_al_corte")]))
-    if P["tipo"] == "lineal":
-        base = base.transform_calculate(dijo="datum.orden", rotulo="'P' + datum.orden")
-        frase = (f"datum.piloto + ': va P' + datum.x_posicion_al_corte + ' → el modelo lo pone P' + datum.orden + "
-                 f"' (posición esperada ' + format(datum.esp, '.1f') + ')'")
-    else:
-        base = base.transform_calculate(dijo="datum.esp", rotulo="format(datum.esp, '.1f')")
-        frase = (f"datum.piloto + ': larga P' + datum.x_posicion_al_corte + ' → el modelo espera que llegue en el puesto ' + "
-                 f"format(datum.esp, '.1f')")
-    cambio = ("(datum.dijo < datum.x_posicion_al_corte - 0.5 ? 'gana ' : datum.dijo > datum.x_posicion_al_corte + 0.5 ? "
-              "'pierde ' : '') + (abs(datum.dijo - datum.x_posicion_al_corte) < 0.5 ? 'queda donde está' : "
-              "format(abs(datum.dijo - datum.x_posicion_al_corte), '.0f') + "
-              "(round(abs(datum.dijo - datum.x_posicion_al_corte)) == 1 ? ' puesto' : ' puestos'))")
-    cab = (base.transform_filter("datum.tuyo").transform_calculate(t=frase, t2=cambio)
-               .mark_text(align="left", baseline="top", x=0, y=2, fontSize=16, fontWeight=700, color=AZUL)
-               .encode(text="t:N"))
-    cab2 = (base.transform_filter("datum.tuyo").transform_calculate(t2=cambio)
-                .mark_text(align="left", baseline="top", x=0, y=26, fontSize=13, color="#5f5d57")
-                .encode(text=alt.Text("t2:N")))
-    cabecera = (cab + cab2).properties(width=660, height=46)
-    filas_ch = base.transform_calculate(etq="datum.piloto + ' · ' + datum.equipo")
-    Y = alt.Y("etq:N", sort=alt.EncodingSortField("orden", order="ascending"), title=None,
-              axis=alt.Axis(labelLimit=220, labelFontSize=11.5, ticks=False, domain=False))
-    XQ = dict(scale=X_PUESTO, axis=alt.Axis(values=list(range(1, 23)), orient="top", grid=True),
-              title="Puesto (1 = adelante)")
+def g_proba_tabla():
+    """La tabla de «Probá»: dónde va cada piloto (izquierda) y dónde lo hace terminar el modelo (derecha).
+    Los datos los pone la página cada vez que se mueve algo (conjunto «tabla»)."""
+    t = (alt.Chart(alt.NamedData(name="tabla"))
+            .transform_calculate(cambio="datum.final < datum.pos ? 'gana puestos' : datum.final > datum.pos ? 'pierde puestos' : 'queda igual'",
+                                 izq="'P' + datum.pos + '  ' + datum.piloto",
+                                 der="datum.lineal ? datum.piloto + '  P' + datum.final : datum.piloto + '  ≈' + format(datum.esp, '.1f')"))
+    Y = dict(scale=alt.Scale(domain=[0.5, 22.5], reverse=True, nice=False, zero=False), axis=None, title=None)
+    X = alt.Scale(domain=[-0.42, 1.42], nice=False, zero=False)
     tip = [alt.Tooltip("nombre:N", title="Piloto"), alt.Tooltip("equipo:N", title="Equipo"),
-           alt.Tooltip("x_posicion_al_corte:Q", title="Dónde va"),
-           alt.Tooltip("esp:Q", title="Posición esperada", format=".2f"),
-           alt.Tooltip("dijo:Q", title="Lo que dice el modelo", format=".1f")]
-    resalte = filas_ch.transform_filter("datum.tuyo").mark_bar(color="#fdf0c4").encode(
-        y=Y, x=alt.X(datum=0.5, scale=X_PUESTO), x2=alt.X2(datum=22.5))
-    mov = filas_ch.mark_rule(color="#d9d6cd", strokeWidth=2).encode(y=Y, x=alt.X("x_posicion_al_corte:Q", **XQ), x2="esp:Q")
-    va = filas_ch.mark_circle(color=NARANJA, size=80, opacity=1).encode(y=Y, x=alt.X("x_posicion_al_corte:Q", **XQ), tooltip=tip)
-    esp = filas_ch.mark_circle(color=AZUL, size=95, opacity=1).encode(y=Y, x=alt.X("esp:Q", **XQ), tooltip=tip)
-    rot = filas_ch.mark_text(align="left", dx=8, fontSize=11.5, fontWeight=600, color=AZUL).encode(
-        y=Y, x=alt.X(datum=22.5, scale=X_PUESTO), text="rotulo:N")
-    cuerpo = (resalte + mov + va + esp + rot).properties(width=660, height=alt.Step(19))
-    detalle = alt.vconcat(cuerpo).add_params(*libres)
+           alt.Tooltip("pos:Q", title="Dónde va"), alt.Tooltip("esp:Q", title="Posición esperada", format=".2f"),
+           alt.Tooltip("final:Q", title="Puesto en la tabla del modelo")]
+    zonas = alt.Chart(pd.DataFrame({"a": [0.5, 3.5], "b": [3.5, 10.5], "c": ["#fdf0c4", "#f4f2ec"]}))
+    capas = [*[zonas.transform_filter(f"datum.c == '{col}'").mark_rect(color=col).encode(
+                 y=alt.Y("a:Q", **Y), y2="b:Q", x=alt.X(datum=-0.42, scale=X, axis=None, title=None), x2=alt.X2(datum=1.42))
+               for col in ("#fdf0c4", "#f4f2ec")],
+             t.mark_rule(strokeCap="round").encode(
+                 x=alt.X(datum=0, scale=X, axis=None, title=None), x2=alt.X2(datum=1), y=alt.Y("pos:Q", **Y), y2="final:Q",
+                 color=alt.Color("cambio:N", scale=alt.Scale(domain=["gana puestos", "queda igual", "pierde puestos"],
+                                                             range=[AZUL, "#c4c1b6", TINTA]),
+                                 legend=alt.Legend(title=None, orient="bottom", direction="horizontal")),
+                 strokeWidth=alt.condition("datum.tuyo", alt.value(5), alt.value(2.2)), tooltip=tip),
+             *[t.transform_filter(fl).mark_text(align="right", dx=-8, fontSize=12, fontWeight=w).encode(
+                 x=alt.X(datum=0, scale=X, axis=None, title=None), y=alt.Y("pos:Q", **Y), text="izq:N", tooltip=tip)
+                   for fl, w in (("datum.tuyo", 800), ("!datum.tuyo", 400))],
+             *[t.transform_filter(fl).mark_text(align="left", dx=8, fontSize=12, color=AZUL, fontWeight=w).encode(
+                 x=alt.X(datum=1, scale=X, axis=None, title=None), y=alt.Y("final:Q", **Y), text="der:N", tooltip=tip)
+                   for fl, w in (("datum.tuyo", 800), ("!datum.tuyo", 500))]]
+    tit = alt.Chart(pd.DataFrame({"x": [0, 1], "t": ["Ahora", "Al final, según el modelo"]})).mark_text(
+        fontSize=12.5, fontWeight=700, dy=-12).encode(x=alt.X("x:Q", scale=X, axis=None, title=None), y=alt.value(0), text="t:N")
+    return alt.layer(*capas, tit).properties(width=380, height=22 * 21)
 
-    # la vista principal: la tabla de posiciones que arma el modelo, de arriba hacia abajo
-    lineal = P["tipo"] == "lineal"
-    t = filas_ch.transform_calculate(
-        puesto="'P' + datum.orden" if lineal else "format(datum.esp, '.1f')",
-        quien="datum.piloto + '  ' + datum.nombre",
-        va=f"'{'va' if m else 'larga'} P' + datum.x_posicion_al_corte",
-        flecha=("datum.orden < datum.x_posicion_al_corte ? '▲ ' + (datum.x_posicion_al_corte - datum.orden) : "
-                "datum.orden > datum.x_posicion_al_corte ? '▼ ' + (datum.orden - datum.x_posicion_al_corte) : '='"))
-    YT = alt.Y("orden:O", axis=None)
-    col_x = {"puesto": 8, "quien": 70, "equipo": 300, "va": 470, "flecha": 545}
-    capas = [t.transform_filter("datum.tuyo").mark_rect(color="#fdf0c4").encode(y=YT, x=alt.value(0), x2=alt.value(600))]
-    for campo, x in col_x.items():
-        estilo_txt = dict(fontSize=13.5, fontWeight=700, color=AZUL) if campo == "puesto" else \
-                     dict(fontSize=13, color=TINTA if campo in ("quien", "flecha") else "#7a776f")
-        capas.append(t.mark_text(align="left", baseline="middle", **estilo_txt).encode(
-            y=YT, x=alt.value(x), text=f"{campo}:N", tooltip=tip))
-    encab = alt.Chart(pd.DataFrame({"x": list(col_x.values()),
-                                    "t": ["Puesto" if lineal else "Esperado", "Piloto", "Equipo", "Ahora", "Cambio"]})) \
-        .mark_text(align="left", fontSize=11, fontWeight=700, color="#8a877f").encode(x=alt.X("x:Q", scale=None, axis=None), text="t:N") \
-        .properties(width=600, height=16)
-    tabla_ch = alt.layer(*capas).properties(width=600, height=alt.Step(23))
-    simple = alt.vconcat(cabecera, encab, tabla_ch, spacing=4).add_params(*params)
 
-    aportes = None
-    if lineal:   # cómo se arma el número de tu piloto: un aporte por entrada, en puestos
-        T = P["terminos"]
-        calc_a = {f"a_{c}": f"{w} * (datum.x_{c} - {mu}) / {sd}" for c, w, mu, sd in T["partes"]}
-        etiqueta = " : ".join(f"datum.k == 'a_{c}' ? '{ENTRADA[c][0]}'" for c, *_ in T["partes"]) + " : 'punto de partida (constante)'"
-        a = (base.transform_filter("datum.tuyo").transform_calculate(a_base=str(T["intercepto"]), **calc_a)
-                 .transform_fold([f"a_{c}" for c, *_ in T["partes"]] + ["a_base"], as_=["k", "v"])
-                 .transform_calculate(etq=etiqueta, lado="datum.v < 0 ? 'lo adelanta' : 'lo atrasa'"))
-        Ya = alt.Y("etq:N", sort=alt.EncodingSortField("v", op="sum", order="ascending"), title=None,
-                   axis=alt.Axis(labelLimit=330, ticks=False, domain=False))
-        barras = a.mark_bar(height=16, color=AZUL).encode(
-            y=Ya, x=alt.X("v:Q", title="Puestos (negativo: lo adelanta · positivo: lo atrasa)"),
-            opacity=alt.condition("datum.v < 0", alt.value(1), alt.value(0.45)),
-            tooltip=[alt.Tooltip("etq:N", title="Entrada"), alt.Tooltip("v:Q", title="Aporte (puestos)", format="+.2f")])
-        nums = a.mark_text(align="left", dx=4, fontSize=11.5, color=TINTA).encode(
-            y=Ya, x=alt.value(0), text=alt.Text("v:Q", format="+.2f"))
-        cero = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#8a877f").encode(x="x:Q")
-        aportes = (cero + barras + nums).properties(
-            width=420, height=alt.Step(26),
-            title=alt.Title("Cómo arma el modelo el número de tu piloto",
-                            subtitle=["Cada barra: cuánto lo mueve esa entrada, comparado con un piloto promedio de 2022–2025.",
-                                      "Posición esperada = dónde va + la suma de todas las barras."])).add_params(*libres)
-    return {"simple": simple, "detalle": detalle, "aportes": aportes}
+def g_proba_aportes():
+    a = alt.Chart(alt.NamedData(name="aportes"))
+    Y = alt.Y("etq:N", sort=alt.EncodingSortField("v", order="ascending"), title=None,
+              axis=alt.Axis(labelLimit=340, ticks=False, domain=False))
+    barras = a.mark_bar(height=16, color=AZUL).encode(
+        y=Y, x=alt.X("v:Q", title="Puestos (negativo: lo adelanta · positivo: lo atrasa)"),
+        opacity=alt.condition("datum.v < 0", alt.value(1), alt.value(0.45)),
+        tooltip=[alt.Tooltip("etq:N", title="Entrada"), alt.Tooltip("v:Q", title="Aporte (puestos)", format="+.2f")])
+    cero = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#8a877f").encode(x="x:Q")
+    return (cero + barras).properties(width=420, height=alt.Step(26),
+                                      title="Cómo arma el modelo el número del piloto elegido")
 
 
 PLANTILLA = r"""<!doctype html>
@@ -737,6 +814,28 @@ button.volver:hover{background:var(--tinta);color:#fff}
 .modelo-usado{font-size:13.5px;color:var(--suave);margin:8px 0 0}
 .aviso{background:#fff6e0;border:1px solid #f0d48a;color:#6b4e00;border-radius:10px;padding:10px 14px;font-size:14px;margin:8px 0}
 .queToca{font-size:14px;color:var(--suave);max-width:80ch}
+.controles.chico{padding:10px 16px}
+.titular{font-size:17px;font-weight:700;color:var(--azul);margin:10px 0 4px;min-height:1.5em}
+.proba{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:16px;align-items:start}
+@media (max-width:900px){.proba{grid-template-columns:1fr}}
+.col-tit{font-weight:700;font-size:14px;margin:0 0 6px}.col-tit small{font-weight:400;color:var(--tenue)}
+.lista{list-style:none;margin:0;padding:0;background:var(--papel);border:1px solid var(--borde);border-radius:14px;overflow:hidden}
+.lista li{border-bottom:1px solid #efede6}.lista li:last-child{border-bottom:0}
+.fila{display:grid;grid-template-columns:18px 34px 1fr auto auto;gap:8px;align-items:center;padding:6px 10px;cursor:pointer;user-select:none}
+.fila:hover{background:#faf9f5}
+.lista li.abierto .fila{background:var(--amarillo)}
+.lista li.arrastrando{opacity:.4}.lista li.sobre{box-shadow:inset 0 3px 0 var(--azul)}
+.asa{color:#b9b6ab;cursor:grab;font-size:14px;letter-spacing:-2px;touch-action:none}
+.pos{font-weight:700;font-variant-numeric:tabular-nums}
+.quien{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.quien b{font-weight:700}.quien span{color:var(--tenue);font-size:12.5px;margin-left:6px}
+.va{font-size:13px;font-weight:700;color:var(--azul);white-space:nowrap;font-variant-numeric:tabular-nums}
+.flechas button{border:1px solid var(--borde);background:#fff;border-radius:6px;width:24px;height:22px;cursor:pointer;font-size:11px;padding:0;margin-left:2px}
+.vars{padding:8px 12px 12px;background:#fffbea;border-top:1px dashed #ecd99a;display:grid;gap:8px}
+.var label{display:flex;justify-content:space-between;font-size:13px;font-weight:600}
+.var label output{font-variant-numeric:tabular-nums}
+.var input{width:100%;accent-color:var(--tinta)}
+.var .rango{font-size:11.5px;color:var(--tenue)}
+.var .fuera{font-size:12px;color:#6b4e00;background:#fff6e0;border-radius:6px;padding:4px 8px;margin-top:3px}
 footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);font-size:13px;border-top:1px solid var(--borde)}
 @media (max-width:760px){.kpis{grid-template-columns:1fr}nav .grupo{display:none}section{padding-top:40px}}
 </style>
@@ -784,49 +883,72 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <h2>__T_MODELO__</h2>
   <p class="lectura">__L_MODELO__</p>
   <div class="grafico" id="g-modelo"></div>
+  <p class="lectura">__L_TABLA__</p>
   <details class="como"><summary>Cómo lo sabemos <small>métrica, validación, comparación, test, errores y en qué se apoya</small></summary><div class="cuerpo">__C_MODELO__</div></details>
 </section>
 
 <section id="explora">
   <span class="parte">En tus manos · Explorá</span>
   <h2>__CARRERAS_EXPLORA__ carreras, cada piloto con lo que dijo el modelo y lo que pasó</h2>
-  <p class="lectura">Arriba, el panorama: cada carrera con su error medio. Elegí el momento, achicá a una temporada o seguí a
-  un piloto, y hacé clic en una carrera para abrirla abajo, piloto por piloto. Pasá el mouse por cualquier punto para ver el
-  detalle, incluida la predicción. Son __N_EXPLORA__ predicciones hechas por un modelo que no había visto esa carrera.</p>
+  <p class="lectura">Arriba, el panorama: cada carrera medida con el error medio o con qué tanto se parece su tabla a la
+  final. Elegí el momento, achicá a una temporada o seguí a un piloto, y hacé clic en una carrera para abrirla abajo: como dos
+  tablas lado a lado o piloto por piloto. Pasá el mouse por cualquier punto o línea para ver el detalle, incluida la
+  predicción. Son __N_EXPLORA__ predicciones hechas por un modelo que no había visto esa carrera.</p>
   <div class="controles">
     <div class="control"><span class="titulo">Momento</span><div id="c-momento"></div></div>
     <div class="control"><span class="titulo">Temporada</span><div id="c-temporada"></div></div>
     <div class="control"><span class="titulo">Seguir a un piloto</span><div id="c-piloto"></div></div>
-  </div>
-  <div class="leyenda">
-    <span><i class="pt" style="background:var(--naranja)"></i>dónde iba en ese momento (lo que dice «termina donde está»)</span>
-    <span><i class="pt" style="background:var(--azul)"></i>lo que dijo el modelo</span>
-    <span><i class="rombo"></i>dónde terminó</span>
-    <span><b class="cruz">✕</b>abandonó</span>
-    <span><i class="franja"></i>el piloto que seguís</span>
+    <div class="control"><span class="titulo">Medir cada carrera por</span><div id="c-medida"></div></div>
   </div>
   <div class="grafico" id="g-explora"></div>
-  <p class="queToca"><strong>Qué toca cada control.</strong> El momento filtra las filas de los dos gráficos. La temporada y el
-  piloto filtran las filas antes de promediar, así que cambian los puntos del panorama (con un piloto, cada punto es su error en
-  esa carrera). El clic es una selección: filtra el detalle a esa carrera y agranda su punto. El piloto que seguís, además,
-  se marca con la franja amarilla.</p>
+  <div class="controles chico">
+    <div class="control"><span class="titulo">Ver la carrera elegida</span><div class="pastillas" id="e-vista">
+      <button data-v="tablas" class="on">Las dos tablas</button><button data-v="det">Piloto por piloto</button></div></div>
+  </div>
+  <div class="vista-e" data-v="tablas">
+    <p class="nota">A la izquierda, la tabla que armó el modelo; a la derecha, la tabla final. Cada línea une a un piloto: si es
+    horizontal, acertó su puesto. Las punteadas son abandonos. Con esto se calculan Spearman, el podio y el top 10.</p>
+    <div class="grafico" id="g-explora-tablas"></div></div>
+  <div class="vista-e" data-v="det" hidden>
+    <div class="leyenda">
+      <span><i class="pt" style="background:var(--naranja)"></i>dónde iba en ese momento (lo que dice «termina donde está»)</span>
+      <span><i class="pt" style="background:var(--azul)"></i>lo que dijo el modelo</span>
+      <span><i class="rombo"></i>dónde terminó</span>
+      <span><b class="cruz">✕</b>abandonó</span>
+      <span><i class="franja"></i>el piloto que seguís</span>
+    </div>
+    <div class="grafico" id="g-explora-det"></div></div>
+  <p class="queToca"><strong>Qué toca cada control.</strong> El momento filtra las filas de todos los gráficos. La temporada
+  y el piloto filtran las filas antes de agrupar por carrera, así que cambian los puntos del panorama. «Medir cada carrera
+  por» cambia el campo del eje vertical: el error medio sale de promediar los pilotos; Spearman, de comparar la tabla entera.
+  El clic es una selección: elige la carrera que se abre abajo y agranda su punto. El piloto que seguís se resalta abajo.</p>
 </section>
 
 <section id="proba">
   <span class="parte">En tus manos · Probá el modelo</span>
-  <h2>Armá la situación de un piloto y mirá en qué puesto lo hace terminar el modelo</h2>
-  <p class="lectura">Partí de un piloto real de una carrera de 2026 (el modelo no las vio al entrenar) y mové sus valores. El
-  modelo recalcula a toda la carrera con su fórmula: los demás pilotos quedan como estaban y, del 25 % en adelante, se
-  reordena a todos 1, 2, 3… Los deslizadores sólo llegan hasta donde llegaron los datos de entrenamiento; si el valor real de
-  un piloto queda afuera, la página avisa.</p>
+  <h2>Armá tu carrera: ordená a los pilotos y mirá dónde los hace terminar el modelo</h2>
+  <p class="lectura">Partí de una carrera real de 2026, que el modelo no vio al entrenar. A la izquierda está el orden en ese
+  momento: <strong>arrastrá a los pilotos</strong> (o usá las flechas) para cambiarlo, y <strong>hacé clic en un piloto</strong>
+  para cambiar sus otros datos. El modelo recalcula a todos con su fórmula, escrita en esta página, y a la derecha muestra la
+  tabla con la que terminarían. Los deslizadores sólo llegan hasta donde llegaron los datos de entrenamiento; si un valor real
+  queda afuera, la página avisa.</p>
   <div class="controles">
     <div class="control"><span class="titulo">Momento</span><div class="pastillas" id="p-momento">
       <button data-k="0">Antes de largar</button><button data-k="25" class="on">25 %</button><button data-k="50">50 %</button><button data-k="75">75 %</button></div></div>
     <div class="control"><span class="titulo">Carrera de 2026</span><select id="p-carrera"></select></div>
-    <div class="control"><span class="titulo">Piloto</span><select id="p-piloto"></select></div>
-    <div class="control"><button type="button" class="volver" id="p-volver">Volver a sus valores reales</button></div>
+    <div class="control"><button type="button" class="volver" id="p-volver">Volver a la carrera real</button></div>
   </div>
-  __PANELES__
+  <p class="modelo-usado" id="p-modelo"></p>
+  <p class="titular" id="p-titular"></p>
+  <div class="proba">
+    <div class="col-lista"><div class="col-tit">Cómo va la carrera <small id="p-ayuda">arrastrá para reordenar</small></div>
+      <ol class="lista" id="p-lista"></ol></div>
+    <div class="col-res"><div class="col-tit">Dónde los hace terminar el modelo</div>
+      <div class="grafico" id="g-proba"></div></div>
+  </div>
+  <p class="aviso" id="p-aviso" hidden></p>
+  <details class="como"><summary>Ver más <small>por qué el modelo pone al piloto elegido en ese puesto</small></summary>
+    <div class="cuerpo"><div class="grafico" id="g-proba-apo"></div><p class="nota" id="p-apo-nota"></p></div></details>
 </section>
 </main>
 <footer>
@@ -836,57 +958,184 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
 </footer>
 <script>
 const SPECS = __SPECS__;
-const PRESETS = __PRESETS__;
-const INICIAL = __INICIAL_P__;
+const PR = __PROBA__;
 const OPC = {actions: false, renderer: "svg",
   formatLocale: {decimal: ",", thousands: ".", grouping: [3], currency: ["$", ""]}};
 const vistas = {};
 const listo = Promise.all(Object.entries(SPECS).map(([id, spec]) =>
   vegaEmbed("#" + id, spec, OPC).then(r => { vistas[id] = r.view; })));
 
-// Probá el modelo: el momento muestra un panel; carrera y piloto cargan los valores reales en los deslizadores
-const selC = document.getElementById("p-carrera"), selP = document.getElementById("p-piloto");
-const num = x => (Math.round(x * 10) / 10).toString().replace(".", ",");
-for (const [c, d] of Object.entries(PRESETS.carreras)) selC.add(new Option(d.gp, c));
-function pilotos(c, elegido) {
-  selP.innerHTML = "";
-  for (const [p, txt] of PRESETS.carreras[c].pilotos) selP.add(new Option(txt, p));
-  if (elegido) selP.value = elegido;
-}
-async function cargar() {
-  const c = selC.value, p = selP.value;
-  for (const k of Object.keys(PRESETS.valores)) {
-    const v = vistas["g-proba-" + k], real = PRESETS.valores[k][c][p], avisos = [];
-    v.signal("carrera_" + k, c).signal("piloto_" + k, p);
-    for (const [col, x] of Object.entries(real)) {
-      const [lo, hi] = PRESETS.rangos[k][col], y = Math.min(hi, Math.max(lo, x));
-      if (y !== x) avisos.push(`<strong>${PRESETS.etiquetas[k][col]}</strong>: su valor real es ${num(x)}, pero al entrenar ` +
-        `el modelo sólo vio valores de ${num(lo)} a ${num(hi)}. El deslizador queda en ${num(y)}.`);
-      v.signal("s" + k + "_" + col, y);
+// Explorá: el panorama le pasa momento, piloto y carrera elegida a las dos vistas del detalle
+listo.then(() => {
+  const pv = vistas["g-explora"], subs = [vistas["g-explora-tablas"], vistas["g-explora-det"]];
+  for (const nm of ["momento_e", "piloto_e"]) pv.addSignalListener(nm, (_, x) => subs.forEach(v => v.signal(nm, x).runAsync()));
+  pv.addDataListener("carrera_e_store", (_, v) => {
+    if (v && v.length) subs.forEach(s => s.signal("carrera_c", v[0].values[0]).runAsync());
+  });
+});
+document.querySelectorAll("#e-vista button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#e-vista button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".vista-e").forEach(d => { d.hidden = d.dataset.v !== b.dataset.v; });
+}));
+
+// Probá el modelo. La fórmula de cada momento viaja en PR: los coeficientes de la regresión lineal (con la media y el
+// desvío del escalado) o, antes de largar, el árbol. La posición de cada piloto es su lugar en la lista.
+const num = (x, d = 1) => x.toFixed(d).replace(".", ",").replace(/,0+$/, "");
+const est = {k: "25", c: PR.inicial, orden: [], vals: {}, reales: {}, abierto: null};
+const selC = document.getElementById("p-carrera"), lista = document.getElementById("p-lista");
+for (const [c, nombre] of Object.entries(PR.carreras)) selC.add(new Option(nombre, c));
+selC.value = est.c;
+
+function predecir(k, orden, vals) {
+  const M = PR.momentos[k];
+  const res = orden.map((p, i) => {
+    const x = Object.assign({}, vals[p], {posicion_al_corte: i + 1});
+    let cambio, partes = [];
+    if (M.lineal) {
+      cambio = M.lineal.intercepto;
+      partes.push(["punto de partida (constante)", M.lineal.intercepto]);
+      for (const [c, w, mu, sd] of M.lineal.partes) { const a = w * (x[c] - mu) / sd; cambio += a; partes.push([M.etq[c], a]); }
+    } else {
+      let n = M.arbol;
+      while (n.v === undefined) n = x[n.c] <= n.u ? n.l : n.r;
+      cambio = n.v;
     }
-    await v.runAsync();
-    const caja = document.getElementById("aviso-" + k);
-    caja.innerHTML = avisos.length ? "⚠ Fuera de lo que vio el modelo. " + avisos.join(" ") : "";
-    caja.hidden = !avisos.length;
-  }
+    return {p, pos: i + 1, esp: i + 1 + cambio, partes};
+  });
+  [...res].sort((a, b) => a.esp - b.esp || a.pos - b.pos).forEach((r, i) => { r.final = i + 1; });
+  return res;
 }
+window.predecir = predecir;
+
+const pantalla = (k, c, v) => PR.momentos[k].log.includes(c) ? Math.expm1(v) : v;
+const modelo = (k, c, v) => PR.momentos[k].log.includes(c) ? Math.log1p(v) : v;
+
+function cargar() {
+  const filas = PR.momentos[est.k].carreras[est.c];
+  est.orden = filas.map(f => f.p);
+  est.vals = Object.fromEntries(filas.map(f => [f.p, Object.assign({}, f.x)]));
+  est.reales = Object.fromEntries(filas.map(f => [f.p, f]));
+  if (!est.reales[est.abierto]) est.abierto = null;
+  const M = PR.momentos[est.k];
+  document.getElementById("p-modelo").textContent = M.tipo === "árbol"
+    ? "Antes de largar se prueba el árbol ajustado: el boosting elegido no se puede escribir en la página (ver «Cómo lo sabemos» del modelo)."
+    : "Regresión lineal elegida en la Entrega 3; del 25 % en adelante el modelo ordena a todos 1, 2, 3…";
+  document.getElementById("p-ayuda").textContent = est.k === "0" ? "arrastrá para cambiar la grilla" : "arrastrá para reordenar";
+  dibujarLista(); actualizar();
+}
+
+function dibujarLista() {
+  const M = PR.momentos[est.k], filas = est.reales;
+  lista.innerHTML = "";
+  est.orden.forEach((p, i) => {
+    const f = filas[p], li = document.createElement("li");
+    li.dataset.p = p;
+    if (p === est.abierto) li.classList.add("abierto");
+    li.innerHTML = `<div class="fila"><span class="asa" aria-hidden="true">⋮⋮</span><span class="pos">P${i + 1}</span>
+      <span class="quien"><b>${p}</b><span>${f.nombre} · ${f.equipo}</span></span><span class="va" data-va></span>
+      <span class="flechas"><button type="button" data-m="-1" aria-label="Subir">▲</button><button type="button" data-m="1" aria-label="Bajar">▼</button></span></div>`;
+    if (p === est.abierto) li.appendChild(editor(p));
+    lista.appendChild(li);
+  });
+}
+
+function editor(p) {
+  const M = PR.momentos[est.k], caja = document.createElement("div");
+  caja.className = "vars";
+  const cols = M.cols.filter(c => c !== "posicion_al_corte");
+  if (!cols.length) caja.innerHTML = "<span class='rango'>En este momento el modelo sólo usa la posición: cambiala arrastrando.</span>";
+  for (const c of cols) {
+    const [lo, hi, paso] = M.rangos[c], real = pantalla(est.k, c, est.reales[p].x[c]);
+    const v = Math.min(hi, Math.max(lo, pantalla(est.k, c, est.vals[p][c])));
+    const d = paso < 1 ? 1 : 0, div = document.createElement("div");
+    div.className = "var";
+    div.innerHTML = `<label>${M.etq[c]}<output>${num(v, d)}</output></label>
+      <input type="range" min="${lo}" max="${hi}" step="${paso}" value="${v}"><span class="rango">de ${num(lo, d)} a ${num(hi, d)} · real: ${num(real, d)}</span>` +
+      (real < lo || real > hi ? `<div class="fuera">⚠ El valor real (${num(real, d)}) está fuera de lo que vio el modelo al entrenar; el deslizador llega hasta ${num(real < lo ? lo : hi, d)}.</div>` : "");
+    const inp = div.querySelector("input"), out = div.querySelector("output");
+    inp.addEventListener("input", () => { out.textContent = num(+inp.value, d); est.vals[p][c] = modelo(est.k, c, +inp.value); actualizar(); });
+    inp.addEventListener("click", e => e.stopPropagation());
+    caja.appendChild(div);
+  }
+  caja.addEventListener("click", e => e.stopPropagation());
+  return caja;
+}
+
+function actualizar() {
+  const M = PR.momentos[est.k], res = predecir(est.k, est.orden, est.vals), por = {};
+  res.forEach(r => { por[r.p] = r; });
+  lista.querySelectorAll("li").forEach(li => {
+    const r = por[li.dataset.p], d = r.final - r.pos;
+    li.querySelector("[data-va]").textContent = M.lineal
+      ? `→ P${r.final}` + (d < 0 ? ` ▲${-d}` : d > 0 ? ` ▼${d}` : "") : `→ ${num(r.esp)}`;
+  });
+  const filas = res.map(r => ({piloto: r.p, nombre: est.reales[r.p].nombre, equipo: est.reales[r.p].equipo,
+    pos: r.pos, final: r.final, esp: Math.round(r.esp * 100) / 100, tuyo: r.p === est.abierto, lineal: !!M.lineal}));
+  const v = vistas["g-proba"];
+  if (v) v.change("tabla", vega.changeset().remove(() => true).insert(filas)).runAsync();
+  const t = document.getElementById("p-titular");
+  if (est.abierto) {
+    const r = por[est.abierto];
+    t.textContent = M.lineal
+      ? `${r.p}: va P${r.pos} → el modelo lo pone P${r.final} (posición esperada ${num(r.esp)})`
+      : `${r.p}: larga P${r.pos} → el modelo espera que llegue en el puesto ${num(r.esp)}`;
+  } else t.textContent = "Hacé clic en un piloto para ver y cambiar sus datos.";
+  const a = vistas["g-proba-apo"];
+  if (a) a.change("aportes", vega.changeset().remove(() => true).insert(
+    est.abierto && M.lineal ? por[est.abierto].partes.map(([etq, val]) => ({etq, v: Math.round(val * 1000) / 1000})) : [])).runAsync();
+  document.getElementById("p-apo-nota").textContent = !M.lineal
+    ? "Antes de largar el modelo de esta página es un árbol: no suma aportes, hace preguntas encadenadas (¿larga antes o después de tal puesto? ¿cuántos puntos tiene?) y cada camino termina en cuántos puestos gana o pierde."
+    : est.abierto ? "Posición esperada = dónde va + la suma de las barras. Cada barra: coeficiente × (valor − media) / desvío, comparado con un piloto promedio de 2022–2025."
+    : "Elegí un piloto de la lista para ver cómo arma el modelo su número.";
+  const aviso = document.getElementById("p-aviso"), n = est.orden.length;
+  aviso.hidden = n <= M.max_pos;
+  aviso.textContent = `⚠ El modelo entrenó con carreras de ${M.max_pos} autos: los puestos ${M.max_pos + 1} a ${n} nunca los vio, así que para esos pilotos la fórmula extrapola.`;
+}
+
+function mover(p, destino) {
+  const i = est.orden.indexOf(p);
+  if (destino < 0 || destino >= est.orden.length || destino === i) return;
+  est.orden.splice(i, 1); est.orden.splice(destino, 0, p);
+  dibujarLista(); actualizar();
+}
+// arrastrar con el mouse o el dedo (en pantallas táctiles, desde el asa ⋮⋮); un clic sin arrastrar abre el piloto
+let arr = null;
+lista.addEventListener("pointerdown", e => {
+  const li = e.target.closest("li");
+  if (!li || e.target.closest("button, input, .vars")) return;
+  if (e.pointerType === "touch" && !e.target.closest(".asa")) return;
+  arr = {p: li.dataset.p, y: e.clientY, mueve: false, li};
+  li.setPointerCapture(e.pointerId);
+});
+lista.addEventListener("pointermove", e => {
+  if (!arr) return;
+  if (!arr.mueve && Math.abs(e.clientY - arr.y) < 6) return;
+  arr.mueve = true; arr.li.classList.add("arrastrando");
+  if (e.clientY < 70) window.scrollBy(0, -14); else if (e.clientY > innerHeight - 50) window.scrollBy(0, 14);
+  const sobre = document.elementFromPoint(e.clientX, e.clientY)?.closest("#p-lista li");
+  lista.querySelectorAll("li").forEach(l => l.classList.toggle("sobre", l === sobre));
+  arr.destino = sobre ? sobre.dataset.p : arr.destino;
+});
+lista.addEventListener("pointerup", e => {
+  if (!arr) return;
+  const a = arr; arr = null;
+  lista.querySelectorAll("li").forEach(l => l.classList.remove("arrastrando", "sobre"));
+  if (a.mueve) { if (a.destino) mover(a.p, est.orden.indexOf(a.destino)); return; }
+  est.abierto = est.abierto === a.p ? null : a.p;
+  dibujarLista(); actualizar();
+});
+lista.addEventListener("click", e => {
+  const b = e.target.closest("button[data-m]"), li = e.target.closest("li");
+  if (b && li) mover(li.dataset.p, est.orden.indexOf(li.dataset.p) + (+b.dataset.m));
+});
 document.querySelectorAll("#p-momento button").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll("#p-momento button").forEach(x => x.classList.toggle("on", x === b));
-  document.querySelectorAll(".panel-proba").forEach(pn => { pn.hidden = pn.dataset.k !== b.dataset.k; });
+  est.k = b.dataset.k; cargar();
 }));
-selC.addEventListener("change", () => { pilotos(selC.value); cargar(); });
-selP.addEventListener("change", cargar);
+selC.addEventListener("change", () => { est.c = selC.value; cargar(); });
 document.getElementById("p-volver").addEventListener("click", cargar);
-selC.value = INICIAL.c; pilotos(INICIAL.c, INICIAL.piloto);
-listo.then(() => {
-  for (const k of Object.keys(PRESETS.valores)) {
-    const v = vistas["g-proba-" + k];
-    const otras = ["-det", "-apo"].map(s => vistas["g-proba-" + k + s]).filter(Boolean);
-    const nombres = ["carrera_" + k, "piloto_" + k, ...Object.keys(PRESETS.rangos[k]).map(c => "s" + k + "_" + c)];
-    for (const nm of nombres) v.addSignalListener(nm, (_, x) => otras.forEach(o => o.signal(nm, x).runAsync()));
-  }
-  return cargar();
-});
+est.abierto = PR.piloto_inicial;
+listo.then(cargar);
 
 // Navegación: marca la sección que se está leyendo
 const enlaces = [...document.querySelectorAll("nav a")];
@@ -974,6 +1223,14 @@ def textos(R, N, corr):
                      f"cualquiera de los dos. Los rombos son el test: en 2026 el modelo erró {f(T[0.0]['modelo'])} antes de "
                      f"largar contra {f(T[0.0]['regla'])} de la regla, y al 75 % perdió ({f(T[0.75]['modelo'])} contra "
                      f"{f(T[0.75]['regla'])}). Los dos quedan muy lejos del piso.")
+    tr = R["tabla_res"].set_index("momento")
+    cortes = int(tr["spearman_cortes"].min())
+    z["l_tabla"] = (f"Mirada como tabla de posiciones, la del modelo se parece más a la final que la de la regla en "
+                    f"{'los 5 cortes de cada momento' if cortes == 5 else f'al menos {cortes} de los 5 cortes de cada momento'} "
+                    f"(Spearman {f(tr.loc['Antes de largar', 'spearman_m_val'])} contra "
+                    f"{f(tr.loc['Antes de largar', 'spearman_r_val'])} antes de largar), y acierta "
+                    f"{f(10 * tr.loc['Antes de largar', 'top10_m_val'], 0)} de cada 10 pilotos de la zona de puntos. El podio "
+                    f"casi no cambia: los que van adelante suelen terminar adelante. En 2026 las dos tablas quedan casi iguales.")
     return z, mod, regla, ventaja
 
 
@@ -1035,6 +1292,38 @@ llegada y cada dato, que compara órdenes y no distancias. «Dónde va» es la p
 la grilla); el puesto del equipo sale de ordenar a los equipos de cada carrera por los puntos que sumaban sus pilotos antes
 de esa carrera. Las dos líneas grises son planas porque son datos de antes de largar: valen lo mismo en los cuatro
 momentos. El eje empieza en 0,4 porque las tres series viven entre 0,5 y 0,9; es un gráfico de líneas, no de barras.</p>"""
+
+
+
+def como_tabla(R):
+    tr = R["tabla_res"]
+    fmt = lambda r, k, q: f"{f(r[f'{k}_{q}_val'], 3)} ± {f(r[f'{k}_{q}_sd'], 3)}"
+    val = [[r["momento"], fmt(r, "spearman", "m"), fmt(r, "spearman", "r"), f"{r['spearman_cortes']} de 5",
+            f"{f(r['podio_m_val'])} / {f(r['podio_r_val'])}", f"{f(r['top10_m_val'])} / {f(r['top10_r_val'])}"]
+           for _, r in tr.iterrows()]
+    test = [[r["momento"], f(r["spearman_m_test"], 3), f(r["spearman_r_test"], 3),
+             f"{r['mejor_test']} / {r['igual_test']} / {r['peor_test']}",
+             f"{f(r['podio_m_test'])} / {f(r['podio_r_test'])}", f"{f(r['top10_m_test'])} / {f(r['top10_r_test'])}"]
+            for _, r in tr.iterrows()]
+    return f"""
+<h4>La tabla completa de cada carrera</h4>
+<p>El MAE mide al modelo piloto por piloto. Pero lo que se predice, en el fondo, es una tabla de posiciones, así que también
+la comparamos entera con la tabla final, carrera por carrera. Para cada carrera se ordena a los pilotos según la predicción
+(si dos empatan, adelante el que va adelante) y se calcula:</p>
+<p><strong>Spearman</strong>: la correlación entre el puesto predicho y el puesto final de cada piloto de esa carrera. Compara
+órdenes, no distancias: da 1 si las dos tablas son idénticas y 0 si no tienen nada que ver. <strong>Podio</strong>: de los 3
+primeros de la tabla predicha, qué parte terminó en el podio. <strong>Top 10</strong>: de los 10 primeros predichos, qué
+parte sumó puntos. Después se promedia sobre las carreras. La regla «termina donde está» también arma una tabla (la grilla, o
+el orden en ese momento), y se mide igual. Estos números no cambiaron ninguna decisión: el modelo ya estaba elegido con el MAE.</p>
+<div class="grafico" id="g-tabla"></div>
+{tabla(["Validación 2022–2025", "Spearman, modelo", "Spearman, regla", "Cortes en que gana el modelo",
+        "Podio, modelo / regla", "Top 10, modelo / regla"], val, "num")}
+{tabla(["Test 2026", "Spearman, modelo", "Spearman, regla", "Carreras mejor / igual / peor",
+        "Podio, modelo / regla", "Top 10, modelo / regla"], test, "num")}
+<p class="nota">La historia es la misma que con el MAE. La tabla del modelo se parece más a la final que la de la regla,
+sobre todo antes de largar y al 25 %, y ordena mejor la zona de puntos. El podio casi no cambia: con los que van adelante el
+modelo tiene poco para agregar. En 2026 las dos tablas quedan prácticamente iguales. En «Explorá» se puede ver cada carrera
+como dos tablas lado a lado.</p>"""
 
 
 def como_modelo(R, mod, regla):
@@ -1105,6 +1394,7 @@ predicciones de cada carrera se ordenan 1, 2, 3…, porque no puede haber dos pi
 {tabla(["Momento", "Modelo", "«Termina donde está»", "Piso", "Modelo en validación", "Carreras mejor / igual / peor que la regla"], test, "num")}
 <p class="nota">La ventaja medida en 2022–2025 no se sostuvo entera. La lluvia no lo explica (2026 tuvo 1 carrera con lluvia de 14;
 la validación, 9 de 75). Quedan el reglamento nuevo o una racha, y con 14 carreras no alcanza para distinguirlos.</p>
+{como_tabla(R)}
 <h4>Dónde se equivoca (test 2026: error del modelo / de la regla, y cuántos pilotos)</h4>
 {tabla(["Situación", *MOMS], sit, "num")}
 <p class="nota">Los errores grandes son los abandonos después del corte: erran entre {f(sit_d['modelo'].min(), 1)} y
@@ -1137,58 +1427,50 @@ def pagina(R, N, hist, corr, salida):
     e["gp"] = e["gp"].map(lambda g_: "GP de " + GP.get(g_, g_))
     R_EXPLORA_TRAIN[0] = int((e["m"] == "Antes de largar").sum()) - N["filas_test"]
     inicial_e = {"m": "Antes de largar", "c": "2026-06"}
-    inicial_p = {"c": "2026-14", "piloto": piloto_inicial(R, "2026-14")}
+    t25 = R["proba"][0.25]["filas"]
+    inicial_p = {"c": "2026-14", "piloto": t25[(t25["c"] == "2026-14") & (t25["posicion_al_corte"] == 6)]["piloto"].iloc[0]}
+    pc, res = R["tabla_pc"], R["tabla_res"]
+    pc = pc.assign(k=pc["c"] + "|" + pc["m"])
+    ex = g_explora(e, pc, inicial_e)
     specs = {"g-datos": estilo(g_datos(hist, N)), "g-hallazgo": estilo(g_hallazgo(corr)),
-             "g-modelo": estilo(g_modelo(R)), "g-explora": estilo(g_explora(e, inicial_e))}
-    presets = {"carreras": {}, "valores": {}, "rangos": {}, "etiquetas": {}}
-    paneles = []
+             "g-modelo": estilo(g_modelo(R)), "g-tabla": estilo(g_tabla(res)),
+             "g-explora": estilo(ex["panorama"]), "g-explora-tablas": estilo(ex["tablas"]),
+             "g-explora-det": estilo(ex["detalle"]),
+             "g-proba": estilo(g_proba_tabla()), "g-proba-apo": estilo(g_proba_aportes())}
+    proba = {"carreras": {}, "momentos": {}, "inicial": inicial_p["c"], "piloto_inicial": inicial_p["piloto"]}
     for m in (0.0, 0.25, 0.5, 0.75):
         P, k = R["proba"][m], CORTO[m]
-        P["filas"]["gp"] = P["filas"]["gp"].map(lambda g_: "GP de " + GP.get(g_, g_))
-        vistas_p = g_proba(m, P, inicial_p)
-        specs[f"g-proba-{k}"] = estilo(vistas_p["simple"])
-        specs[f"g-proba-{k}-det"] = estilo(vistas_p["detalle"])
-        if vistas_p["aportes"] is not None:
-            specs[f"g-proba-{k}-apo"] = estilo(vistas_p["aportes"])
-        mas = (f'<div class="grafico" id="g-proba-{k}-apo"></div>' if vistas_p["aportes"] is not None else
-               '<p class="nota">Antes de largar el modelo de esta página es un árbol: no suma aportes, hace preguntas '
-               'encadenadas (¿larga antes o después del puesto tal? ¿cuántos puntos tiene?) y cada camino termina en '
-               'cuántos puestos gana o pierde.</p>')
-        etq = {c: ("Lugar de largada" if (m == 0 and c == "posicion_al_corte") else ENTRADA[c][0]) for c in P["columnas"]}
-        presets["rangos"][k], presets["etiquetas"][k] = P["rangos_pantalla"], etq
-        presets["valores"][k] = {c: {r["piloto"]: {col: round(float(a_pantalla(col, r[col])), 2) for col in P["columnas"]}
-                                     for _, r in t.iterrows()} for c, t in P["filas"].groupby("c")}
-        deslizadores = "".join(f'<div class="desl"><span class="etq">{etq[c]}</span><div id="d{k}-{c}"></div>'
-                               f'<span class="rango">de {f(P["rangos_pantalla"][c][0], 1 if P["rangos_pantalla"][c][2] < 1 else 0)} '
-                               f'a {f(P["rangos_pantalla"][c][1], 1 if P["rangos_pantalla"][c][2] < 1 else 0)}</span></div>'
-                               for c in P["columnas"])
-        modelo_txt = ("Árbol ajustado (el boosting elegido no se puede escribir en la página; ver «Cómo lo sabemos» del modelo)"
-                      if P["tipo"] == "árbol" else "Regresión lineal elegida en la Entrega 3, con su fórmula escrita en la página")
-        paneles.append(f'<div class="panel-proba" data-k="{k}"{" hidden" if m != 0.25 else ""}>'
-                       f'<p class="modelo-usado">{modelo_txt}.</p><div class="deslizadores">{deslizadores}</div>'
-                       f'<p class="aviso" id="aviso-{k}" hidden></p><div class="grafico" id="g-proba-{k}"></div>'
-                       f'<details class="como"><summary>Ver más <small>la carrera en el gráfico y por qué lo pone ahí</small></summary>'
-                       f'<div class="cuerpo"><div class="leyenda"><span><i class="pt" style="background:var(--naranja)"></i>dónde va</span>'
-                       f'<span><i class="pt" style="background:var(--azul)"></i>posición esperada por el modelo</span></div>'
-                       f'<div class="grafico" id="g-proba-{k}-det"></div>{mas}</div></details></div>')
-    t = R["proba"][0.25]["filas"]
-    for c, g_ in t.groupby("c"):
-        presets["carreras"][c] = {"gp": g_["gp"].iloc[0] + " " + c[:4],
-                                  "pilotos": [[p, f"{nm} · {eq}"] for p, nm, eq in
-                                              g_.sort_values("real")[["piloto", "nombre", "equipo"]].itertuples(index=False)]}
+        rangos = {}
+        for col in P["columnas"]:
+            paso = ENTRADA[col][1]
+            lo, hi = ((np.expm1(v) if ENTRADA[col][2] == "log" else v) for v in P["rangos"][col])
+            rangos[col] = [round(float(np.floor(lo / paso + 1e-9) * paso), 2), round(float(np.ceil(hi / paso - 1e-9) * paso), 2), paso]
+        carreras = {}
+        for c, t in P["filas"].groupby("c"):
+            t = t.sort_values("posicion_al_corte")
+            if not np.array_equal(t["posicion_al_corte"].to_numpy(), np.arange(1, len(t) + 1)):
+                avisar(f"en {c} ({ETIQUETA[m]}) las posiciones no van de 1 a N: la lista de «Probá» no las reproduce")
+            carreras[c] = [{"p": r["piloto"], "nombre": r["nombre"], "equipo": r["equipo"], "esp_sk": float(r["esp_sk"]),
+                            "x": {col: float(r[col]) for col in P["columnas"]}} for _, r in t.iterrows()]
+            proba["carreras"][c] = "GP de " + GP.get(t["gp"].iloc[0], t["gp"].iloc[0]) + " " + c[:4]
+        proba["momentos"][k] = {
+            "tipo": P["tipo"], "cols": P["columnas"], "rangos": rangos, "carreras": carreras,
+            "etq": {c: ("Lugar de largada" if (m == 0 and c == "posicion_al_corte") else ENTRADA[c][0]) for c in P["columnas"]},
+            "log": [c for c in P["columnas"] if ENTRADA[c][2] == "log"],
+            "max_pos": int(round(P["rangos"]["posicion_al_corte"][1])),
+            "lineal": P["terminos"] if P["tipo"] == "lineal" else None,
+            "arbol": P["terminos"]["arbol"] if P["tipo"] == "árbol" else None}
     specs_json = json.dumps({k: v.to_dict() for k, v in specs.items()}, ensure_ascii=False, separators=(",", ":"))
     kpis = "".join(f'<div class="kpi"><div class="num">{a}</div><div class="que">{b}</div></div>' for a, b in z["kpis"])
     html = (PLANTILLA.replace("__IDEA__", z["idea"]).replace("__KPIS__", kpis)
             .replace("__T_DATOS__", z["t_datos"]).replace("__L_DATOS__", z["l_datos"]).replace("__C_DATOS__", como_datos(N))
             .replace("__T_HALLAZGO__", z["t_hallazgo"]).replace("__L_HALLAZGO__", z["l_hallazgo"])
             .replace("__C_HALLAZGO__", como_hallazgo(corr))
-            .replace("__T_MODELO__", z["t_modelo"]).replace("__L_MODELO__", z["l_modelo"])
+            .replace("__T_MODELO__", z["t_modelo"]).replace("__L_MODELO__", z["l_modelo"]).replace("__L_TABLA__", z["l_tabla"])
             .replace("__C_MODELO__", como_modelo(R, mod, regla))
             .replace("__N_EXPLORA__", n(len(e))).replace("__CARRERAS_EXPLORA__", str(e["c"].nunique()))
-            .replace("__PANELES__", "".join(paneles))
             .replace("__FECHA__", time.strftime("%d/%m/%Y"))
-            .replace("__SPECS__", specs_json).replace("__PRESETS__", json.dumps(presets, ensure_ascii=False))
-            .replace("__INICIAL_P__", json.dumps(inicial_p)))
+            .replace("__SPECS__", specs_json).replace("__PROBA__", json.dumps(proba, ensure_ascii=False)))
     Path(salida).parent.mkdir(parents=True, exist_ok=True)
     Path(salida).write_text(html, encoding="utf-8")
     return html
@@ -1207,6 +1489,7 @@ if __name__ == "__main__":
     g = ejecutar_notebook(a.notebook, a.datos)
     print(f"2-3. Modelos, validación, test y fórmulas…  ({time.time() - t0:.0f} s)")
     R = calcular(g)
+    R["tabla_pc"], R["tabla_res"] = metricas_tabla(R["explora"])
     N, hist, corr = datos_y_hallazgo(g)
     print(f"4. Gráficos y página…  ({time.time() - t0:.0f} s)")
     html = pagina(R, N, hist, corr, a.salida)
