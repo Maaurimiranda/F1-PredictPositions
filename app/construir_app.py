@@ -116,7 +116,9 @@ DEL_NOTEBOOK = {"piso": 4.962, "regla": {0.0: 3.311, 0.25: 2.757, 0.5: 2.029, 0.
                 "elegido": {0.0: 2.911, 0.25: 2.475, 0.5: 1.853, 0.75: 1.334},
                 "test": {0.0: 3.040, 0.25: 2.332, 0.5: 1.654, 0.75: 1.249}}
 # números de la sección 4 del notebook (selección de columnas), que este script no vuelve a calcular
-SELECCION_E3 = {"aporte_campeonato": 0.259, "equipo_varianza": 32.6, "ordenar": {0.25: 0.073, 0.5: 0.121, 0.75: 0.163}}
+SELECCION_E3 = {"aporte_campeonato": 0.259, "equipo_varianza": 32.6, "ordenar": {0.25: 0.073, 0.5: 0.121, 0.75: 0.163},
+                # sección 5: el modelo final con y sin equipo_top (mejora media, desvío, cortes en que mejora)
+                "equipo_top": {0.0: (0.012, 0.023, 4), 0.25: (0.037, 0.062, 4), 0.5: (-0.008, 0.018, 2), 0.75: (-0.009, 0.015, 1)}}
 # de qué columnas del snapshot sale cada entrada del modelo (para mezclarlas en la importancia por permutación)
 ORIGEN = {"posicion_al_corte": ["posicion_al_corte"], "vueltas_detras": ["ultima_vuelta"],
           "neumatico_vs_carrera": ["vueltas_neumatico", "ultima_vuelta"], "tendencia_10": ["pos_hace_10"],
@@ -176,7 +178,7 @@ def calcular(g):
                 "equipo": o["team_name"].to_numpy(), "pos": o["posicion_al_corte"].to_numpy(),
                 "pred": np.round(final, 2), "esp": np.round(esperada, 2), "real": o["finish_position"].to_numpy(),
                 "fin": np.where(terminó, "terminó", "abandonó"),
-                "sit": np.select([ya, terminó], ["ya había abandonado", "terminó"], "abandonó después"),
+                "sit": np.select([ya, terminó], ["ya había abandonado en ese momento", "terminó"], "abandonó más adelante"),
                 "muestra": muestra, "corte": corte})
 
         # validación: cada carrera validada la predice el modelo del corte que no la vio
@@ -345,14 +347,14 @@ def datos_y_hallazgo(g):
     D, snapshots, vueltas = g["DATOS"], g["snapshots"], g["vueltas"]
     todo = pd.concat([D[0.0]["train"], D[0.0]["test"]], ignore_index=True)
     terminó = todo["status"].str.contains("Finished|Lap", regex=True)
-    cambio = todo["finish_position"] - todo["posicion_al_corte"]
+    cambio = todo["posicion_al_corte"] - todo["finish_position"]      # lugares ganados: largada − llegada
     N = {"snap": len(snapshots), "pcts": int(snapshots["pct_race_complete"].nunique()), "vueltas": len(vueltas),
          "por_momento": len(todo), "carreras": todo["carrera"].nunique(), "pilotos": todo["driver_code"].nunique(),
          "carreras_train": D[0.0]["train"]["carrera"].nunique(), "filas_train": len(D[0.0]["train"]),
          "carreras_test": D[0.0]["test"]["carrera"].nunique(), "filas_test": len(D[0.0]["test"]),
          "abandonos": int((~terminó).sum()), "abandonos_pct": float((~terminó).mean()),
-         "cerca": float((cambio.abs() <= 2).mean()), "caida_abandono": float(cambio[~terminó].mean()),
-         "grandes_abandono": float(((cambio >= 5) & ~terminó).sum() / (cambio >= 5).sum()),
+         "cerca": float((cambio.abs() <= 2).mean()), "caida_abandono": float(-cambio[~terminó].mean()),
+         "grandes_abandono": float(((cambio <= -5) & ~terminó).sum() / (cambio <= -5).sum()),
          "fuga": list(g["FUGA"]), "coincide": {m: float(g["POSICION"].loc[g["NOMBRE"][m], "current_position coincide"])
                                               for m in (0.25, 0.5, 0.75)}}
     N["solo_entrenan"] = D[0.0]["X"].iloc[D[0.0]["cortes"][0][0]]["carrera"].nunique()
@@ -400,85 +402,88 @@ def g_datos(hist, N):
               .transform_aggregate(n="count()", groupby=["cambio", "fin"])
               .transform_calculate(orden="datum.fin == 'terminó' ? 0 : 1"))
     banda = alt.Chart(pd.DataFrame({"a": [-2.5], "b": [2.5]})).mark_rect(color="#f2efe6").encode(
-        x=alt.X("a:Q", scale=alt.Scale(domain=[-19, 21], nice=False)), x2="b:Q")
+        x=alt.X("a:Q", scale=alt.Scale(domain=[-21, 19], nice=False)), x2="b:Q")
     barras = base.mark_bar(size=13).encode(
-        x=alt.X("cambio:Q", scale=alt.Scale(domain=[-19, 21], nice=False),
-                axis=alt.Axis(values=list(range(-15, 21, 5)), grid=False),
-                title="Puesto de llegada menos lugar de largada (negativo: ganó puestos · positivo: perdió)"),
-        y=alt.Y("n:Q", stack="zero", title="Pilotos-carrera"),
+        x=alt.X("cambio:Q", scale=alt.Scale(domain=[-21, 19], nice=False),
+                axis=alt.Axis(values=list(range(-20, 16, 5)), grid=False),
+                title="← perdió lugares          ganó lugares →"),
+        y=alt.Y("n:Q", stack="zero", title="Cantidad de casos"),
         color=alt.Color("fin:N", scale=alt.Scale(domain=["terminó", "abandonó"], range=[CLARO, VINO]),
-                        legend=alt.Legend(title=None, orient="top-right", direction="vertical")),
+                        legend=alt.Legend(title=None, orient="top-left", direction="vertical",
+                                          labelExpr="datum.label == 'terminó' ? 'terminó la carrera' : 'abandonó'")),
         order=alt.Order("orden:Q"),
-        tooltip=[alt.Tooltip("cambio:Q", title="Llegada − largada"), alt.Tooltip("fin:N", title="Situación"),
-                 alt.Tooltip("n:Q", title="Pilotos-carrera")])
-    nota = alt.Chart(pd.DataFrame({"x": [0], "t": [f"{N['cerca']:.0%} termina a ±2 puestos".replace("%", " %")]})).mark_text(
+        tooltip=[alt.Tooltip("cambio:Q", title="Lugares ganados (negativo: perdidos)"), alt.Tooltip("fin:N", title="Situación"),
+                 alt.Tooltip("n:Q", title="Casos")])
+    nota = alt.Chart(pd.DataFrame({"x": [0], "t": [f"{N['cerca']:.0%} queda a 2 lugares o menos".replace("%", " %")]})).mark_text(
         dy=-6, fontSize=12, fontWeight=600, color="#5f5d57", baseline="bottom").encode(
         x="x:Q", y=alt.value(0), text="t:N")
     return (banda + barras + nota).properties(
         width=700, height=300,
-        title=alt.Title("Cuántos puestos se mueve cada piloto entre la largada y la llegada",
-                        subtitle=[f"{N['por_momento']:,} pilotos-carrera de {N['carreras']} carreras, 2022–2026.".replace(",", ".")]))
+        title=alt.Title("Cuántos lugares gana o pierde cada piloto entre la largada y la llegada",
+                        subtitle=[f"Cada barra cuenta cuántos pilotos ganaron o perdieron esa cantidad de lugares. "
+                                  f"{N['por_momento']:,} casos (un piloto en una carrera), {N['carreras']} carreras de 2022 a 2026.".replace(",", ".", 1)]))
 
 
 def g_hallazgo(corr):
     series = ["dónde va en ese momento", "puesto en el campeonato", "puesto del equipo"]
+    nombres = {"dónde va en ese momento": "el lugar en el que va", "puesto en el campeonato": "su puesto en el campeonato",
+               "puesto del equipo": "el puesto de su equipo"}
+    corr = corr.assign(nombre=corr["serie"].map(nombres))
     color = alt.Color("serie:N", scale=alt.Scale(domain=series, range=[NARANJA, "#5f5d57", "#aeaba1"]), legend=None)
     base = alt.Chart(corr).encode(
-        x=alt.X("momento:N", sort=MOMS, title="Momento de la carrera", axis=alt.Axis(labelAngle=0, labelPadding=6)),
-        y=alt.Y("rho:Q", scale=alt.Scale(domain=[0.4, 1.0]), title="Correlación con el puesto de llegada"),
+        x=alt.X("momento:N", sort=MOMS, title="Cuánto de la carrera se había corrido", axis=alt.Axis(labelAngle=0, labelPadding=6)),
+        y=alt.Y("rho:Q", scale=alt.Scale(domain=[0.4, 1.0]), title="Qué tan bien anticipa el orden de llegada",
+                axis=alt.Axis(format=".1f")),
         color=color)
-    tip = [alt.Tooltip("serie:N", title="Qué se mira"), alt.Tooltip("momento:N", title="Momento"),
-           alt.Tooltip("rho:Q", title="Correlación (Spearman)", format=".2f")]
+    tip = [alt.Tooltip("nombre:N", title="Dato"), alt.Tooltip("momento:N", title="Momento"),
+           alt.Tooltip("rho:Q", title="Qué tan bien anticipa (0 a 1)", format=".2f")]
     lineas = base.mark_line(strokeWidth=3)
     puntos = base.mark_circle(size=95, opacity=1).encode(tooltip=tip)
     valores = base.transform_filter("datum.serie == 'dónde va en ese momento'").mark_text(
         dy=-14, fontSize=12, fontWeight=600).encode(text=alt.Text("rho:Q", format=".2f"))
     rotulos = base.transform_filter("datum.momento == '75 %'").transform_calculate(
-        t="datum.serie + ' · ' + format(datum.rho, '.2f')").mark_text(align="left", dx=12, fontSize=12.5).encode(
+        t="datum.nombre + ' · ' + format(datum.rho, '.2f')").mark_text(align="left", dx=12, fontSize=12.5).encode(
         text="t:N")
     return (lineas + puntos + valores + rotulos).properties(
         width=520, height=320, padding={"left": 4, "right": 210, "top": 6, "bottom": 4},
-        title=alt.Title("Qué tanto se parece cada dato al puesto final, en cada momento",
-                        subtitle=["2022–2025, 1.826 pilotos-carrera por momento (el test no se mira).",
-                                  "1 = mismo orden que la llegada; 0 = nada que ver."]))
+        title=alt.Title("Qué tan bien anticipa cada dato el orden de llegada",
+                        subtitle=["1 = acierta el orden exacto; 0 = no tiene nada que ver. Carreras de 2022 a 2025.",
+                                  "Antes de la largada, «el lugar en el que va» es su lugar en la grilla."]))
 
 
 def g_modelo(R):
+    regla_n, modelo_n = "«termina donde está» (cada uno llega donde va)", "nuestro modelo"
     filas = []
     for m in (0.0, 0.25, 0.5, 0.75):
         c, el = R["comparacion"][m], DECISIONES["elegido"][m]
-        for quien, v, t in [("«termina donde está»", c["regla"], R["test"][m]["regla"]),
-                            ("modelo", c[el], R["test"][m]["modelo"])]:
-            filas.append({"momento": ETIQUETA[m], "quien": quien, "muestra": "validación 2022–2025", "mae": v.mean(),
-                          "lo": v.mean() - v.std(), "hi": v.mean() + v.std(), "desvio": v.std()})
-            filas.append({"momento": ETIQUETA[m], "quien": quien, "muestra": "test 2026", "mae": t,
-                          "lo": t, "hi": t, "desvio": None})
+        for quien, v, t in [(regla_n, c["regla"], R["test"][m]["regla"]), (modelo_n, c[el], R["test"][m]["modelo"])]:
+            filas.append({"momento": ETIQUETA[m], "quien": quien, "muestra": "carreras de 2022 a 2025", "mae": v.mean()})
+            filas.append({"momento": ETIQUETA[m], "quien": quien, "muestra": "carreras de 2026 (nunca vistas)", "mae": t})
     df = pd.DataFrame(filas)
-    quienes = ["«termina donde está»", "modelo"]
-    X_M = alt.X("momento:N", sort=MOMS, title="Momento de la carrera", axis=alt.Axis(labelAngle=0, labelPadding=6))
+    quienes = [regla_n, modelo_n]
+    X_M = alt.X("momento:N", sort=MOMS, title="Cuánto de la carrera se había corrido",
+                axis=alt.Axis(labelAngle=0, labelPadding=6))
     XO = alt.XOffset("quien:N", sort=quienes, scale=alt.Scale(paddingOuter=0.6))
     color = alt.Color("quien:N", scale=alt.Scale(domain=quienes, range=[NARANJA, AZUL]),
-                      legend=alt.Legend(title=None, orient="top-right", direction="vertical"))
-    tip = [alt.Tooltip("quien:N", title="Quién"), alt.Tooltip("momento:N", title="Momento"),
-           alt.Tooltip("muestra:N", title="Dónde se midió"), alt.Tooltip("mae:Q", title="Error medio (puestos)", format=".3f"),
-           alt.Tooltip("desvio:Q", title="Desvío entre cortes", format=".3f")]
+                      legend=alt.Legend(title=None, orient="bottom", direction="horizontal", labelLimit=400))
+    tip = [alt.Tooltip("quien:N", title="Quién predice"), alt.Tooltip("momento:N", title="Momento"),
+           alt.Tooltip("muestra:N", title="Carreras"), alt.Tooltip("mae:Q", title="Se equivoca en promedio (puestos)", format=".2f")]
     base = alt.Chart(df).encode(x=X_M, xOffset=XO, color=color)
-    val = base.transform_filter("datum.muestra == 'validación 2022–2025'")
-    Y = alt.Y("mae:Q", scale=alt.Scale(domain=[0, 5.5]), title="Error medio (puestos)")
-    barras = val.mark_rule(strokeWidth=2.5).encode(y="lo:Q", y2="hi:Q")
-    puntos = val.mark_circle(size=120, opacity=1).encode(y=Y, tooltip=tip)
-    valores = val.mark_text(dy=-10, fontSize=11.5, fontWeight=600, baseline="bottom").encode(
-        y="hi:Q", text=alt.Text("mae:Q", format=".2f"))
-    test = base.transform_filter("datum.muestra == 'test 2026'").mark_point(
+    val = base.transform_filter("datum.muestra == 'carreras de 2022 a 2025'")
+    Y = alt.Y("mae:Q", scale=alt.Scale(domain=[0, 5.5]), title="Puestos que se equivoca, en promedio")
+    puntos = val.mark_circle(size=130, opacity=1).encode(y=Y, tooltip=tip)
+    valores = val.mark_text(dy=-12, fontSize=11.5, fontWeight=600, baseline="bottom").encode(
+        y="mae:Q", text=alt.Text("mae:Q", format=".1f"))
+    test = base.transform_filter("datum.muestra == 'carreras de 2026 (nunca vistas)'").mark_point(
         shape="diamond", filled=False, size=120, strokeWidth=2).encode(y="mae:Q", tooltip=tip)
     piso = alt.Chart(pd.DataFrame({"y": [R["comparacion"][0.0]["piso"].mean()]}))
     linea_piso = piso.mark_rule(strokeDash=[6, 4], color=PISO, strokeWidth=1.5).encode(y="y:Q")
-    texto_piso = piso.transform_calculate(t="'piso: decir siempre el puesto del medio (' + format(datum.y, '.2f') + ')'")\
+    texto_piso = piso.transform_calculate(t="'adivinar a ciegas: todos terminan en el medio del pelotón (' + format(datum.y, '.1f') + ')'")\
         .mark_text(align="left", baseline="bottom", dy=-4, x=4, color="#7a776f", fontSize=11.5).encode(y="y:Q", text="t:N")
-    return (linea_piso + texto_piso + barras + puntos + valores + test).properties(
+    return (linea_piso + texto_piso + puntos + valores + test).properties(
         width=640, height=330,
-        title=alt.Title("Error medio de cada predicción, en puestos (más abajo, mejor)",
-                        subtitle=["Punto: media de los 5 cortes de la validación; barra: un desvío. Rombo: las 14 carreras de 2026."]))
+        title=alt.Title("Cuántos puestos se equivoca cada forma de predecir, en promedio (más abajo es mejor)",
+                        subtitle=["Puntos: carreras de 2022 a 2025. Rombos: las 14 carreras de 2026, que el modelo nunca había visto."]))
 
 
 def g_explora(e, pc, inicial):
@@ -492,8 +497,8 @@ def g_explora(e, pc, inicial):
                        bind=alt.binding_select(options=["Todos"] + pil["piloto"].tolist(),
                                                labels=["Todos"] + [f"{n} ({c})" for n, c in zip(pil["nombre"], pil["piloto"])],
                                                name=" ", element="#c-piloto"))
-    medida = alt.param(name="medida_e", value="Error medio (MAE)",
-                       bind=alt.binding_radio(options=["Error medio (MAE)", "Parecido de la tabla (Spearman)"], name=" ",
+    medida = alt.param(name="medida_e", value="Cuántos puestos se equivoca",
+                       bind=alt.binding_radio(options=["Cuántos puestos se equivoca", "Qué tan parecida queda la tabla"], name=" ",
                                               element="#c-medida"))
     carrera = alt.selection_point(name="carrera_e", fields=["c"], value=[{"c": inicial["c"]}], on="click",
                                   clear=False, toggle=False)
@@ -505,23 +510,22 @@ def g_explora(e, pc, inicial):
                                    groupby=["c", "m", "gp", "fecha", "temp", "muestra"])
               .transform_calculate(k="datum.c + '|' + datum.m")
               .transform_lookup(lookup="k", from_=alt.LookupData(pc, key="k", fields=TABLA_CAMPOS))
-              .transform_calculate(mae="medida_e == 'Error medio (MAE)'",
+              .transform_calculate(mae="medida_e == 'Cuántos puestos se equivoca'",
                                    modelo="datum.mae ? datum.mae_m : datum.spearman_m",
                                    regla="datum.mae ? datum.mae_r : datum.spearman_r"))
     fin_test = (pd.to_datetime(e["fecha"].max()) + pd.Timedelta(days=12)).strftime("%Y-%m-%d")
-    test = pd.DataFrame({"a": ["2026-01-01"], "b": [fin_test], "t": ["test 2026"]})
+    test = pd.DataFrame({"a": ["2026-01-01"], "b": [fin_test], "t": ["2026: carreras nuevas"]})
     X_F = alt.X("fecha:T", title=None, axis=alt.Axis(format="%Y", tickCount="year", grid=False))
     banda = alt.Chart(test).mark_rect(color="#f2efe6").encode(x=alt.X("a:T"), x2="b:T")
     banda_t = alt.Chart(test).mark_text(align="left", baseline="top", dx=6, y=4, color="#7a776f", fontSize=11.5).encode(
         x="a:T", text="t:N")
     tip_p = [alt.Tooltip("gp:N", title="Carrera"), alt.Tooltip("fecha:T", title="Fecha", format="%d/%m/%Y"),
-             alt.Tooltip("muestra:N", title="Predicción"), alt.Tooltip("n:Q", title="Pilotos"),
-             alt.Tooltip("mae_m:Q", title="Error del modelo (MAE)", format=".2f"),
-             alt.Tooltip("mae_r:Q", title="Error de «termina donde está»", format=".2f"),
-             alt.Tooltip("spearman_m:Q", title="Spearman del modelo", format=".2f"),
-             alt.Tooltip("spearman_r:Q", title="Spearman de la regla", format=".2f"),
-             alt.Tooltip("podio_m:Q", title="Podio acertado (modelo)", format=".0%"),
-             alt.Tooltip("top10_m:Q", title="Top 10 acertado (modelo)", format=".0%")]
+             alt.Tooltip("mae_m:Q", title="El modelo se equivoca (puestos)", format=".1f"),
+             alt.Tooltip("mae_r:Q", title="«Termina donde está» se equivoca (puestos)", format=".1f"),
+             alt.Tooltip("spearman_m:Q", title="Parecido de la tabla del modelo (0 a 1)", format=".2f"),
+             alt.Tooltip("spearman_r:Q", title="Parecido de la tabla de la regla (0 a 1)", format=".2f"),
+             alt.Tooltip("podio_m:Q", title="Podio que acertó el modelo", format=".0%"),
+             alt.Tooltip("top10_m:Q", title="Zona de puntos que acertó el modelo", format=".0%")]
     une = pano.mark_rule(color="#d9d6cd").encode(x=X_F, y="regla:Q", y2="modelo:Q")
     regla = pano.mark_tick(color=NARANJA, thickness=2.5, size=11, opacity=0.9).encode(x=X_F, y="regla:Q", tooltip=tip_p)
     modelo = pano.mark_circle(color=AZUL, opacity=1, cursor="pointer").encode(
@@ -530,12 +534,12 @@ def g_explora(e, pc, inicial):
         stroke=alt.condition(carrera, alt.value(TINTA), alt.value(None)), strokeWidth=alt.value(2),
         tooltip=tip_p).add_params(carrera)
     eje = alt.Chart(pd.DataFrame({"a": [1]})).transform_calculate(
-        t="medida_e == 'Error medio (MAE)' ? '↓ error medio en puestos (más abajo, mejor)' : '↑ Spearman: 1 = tabla idéntica (más arriba, mejor)'"
+        t="medida_e == 'Cuántos puestos se equivoca' ? 'puestos que se equivoca, en promedio (más abajo es mejor)' : 'parecido entre la tabla predicha y la final: 1 = idénticas (más arriba es mejor)'"
     ).mark_text(align="left", baseline="top", x=4, y=2, fontSize=11.5, fontWeight=600, color="#5f5d57").encode(text="t:N")
     panorama = (banda + banda_t + une + regla + modelo + eje).properties(
         width=760, height=210,
-        title=alt.Title("Todas las carreras con predicción fuera de muestra",
-                        subtitle=["Cada punto azul es una carrera, medida según «Medir cada carrera por»; la raya naranja, lo mismo para «termina donde está».",
+        title=alt.Title("Todas las carreras",
+                        subtitle=["Cada punto azul es una carrera: cómo le fue al modelo. La raya naranja: cómo le fue a «termina donde está».",
                                   "Hacé clic en una carrera para abrirla abajo."]))
 
     sel = alt.Chart(e).transform_filter("datum.m == momento_e").transform_filter(carrera)
@@ -544,12 +548,12 @@ def g_explora(e, pc, inicial):
                    .transform_calculate(k="datum.c + '|' + datum.m")
                    .transform_lookup(lookup="k", from_=alt.LookupData(pc, key="k", fields=TABLA_CAMPOS))
                    .transform_calculate(
-                       t="datum.gp + ' ' + datum.temp + ' · ' + momento_e + ' · ' + datum.muestra",
-                       t2="'Modelo: error medio ' + format(datum.modelo, '.2f') + ' · Spearman ' + format(datum.spearman_m, '.2f') + "
-                          "' · podio ' + round(datum.podio_m * 3) + ' de 3 · top 10 ' + round(datum.top10_m * 10) + ' de 10'",
-                       t3="'«Termina donde está»: error medio ' + format(datum.regla, '.2f') + ' · Spearman ' + "
-                          "format(datum.spearman_r, '.2f') + ' · podio ' + round(datum.podio_r * 3) + ' de 3 · top 10 ' + "
-                          "round(datum.top10_r * 10) + ' de 10'"))
+                       t="datum.gp + ' ' + datum.temp + ' · ' + (momento_e == 'Antes de largar' ? 'antes de la largada' : "
+                         "'con el ' + momento_e + ' de la carrera corrido')",
+                       t2="'Nuestro modelo: se equivocó ' + format(datum.modelo, '.1f') + ' puestos en promedio · acertó ' + "
+                          "round(datum.podio_m * 3) + ' de 3 del podio y ' + round(datum.top10_m * 10) + ' de 10 de la zona de puntos'",
+                       t3="'«Termina donde está»: se equivocó ' + format(datum.regla, '.1f') + ' puestos en promedio · acertó ' + "
+                          "round(datum.podio_r * 3) + ' de 3 del podio y ' + round(datum.top10_r * 10) + ' de 10 de la zona de puntos'"))
     cab = (cab_base.mark_text(align="left", baseline="top", x=0, y=2, fontSize=14, fontWeight=600, color=TINTA).encode(text="t:N")
            + cab_base.mark_text(align="left", baseline="top", x=0, y=24, fontSize=12.5, color=AZUL).encode(text="t2:N")
            + cab_base.mark_text(align="left", baseline="top", x=0, y=42, fontSize=12.5, color="#b35a16").encode(text="t3:N")
@@ -564,14 +568,12 @@ def g_explora(e, pc, inicial):
     Y_D = alt.Y("etq:N", sort=alt.EncodingSortField("real", order="ascending"), title=None,
                 axis=alt.Axis(labelLimit=220, labelFontSize=11.5, ticks=False, domain=False))
     X_D = dict(scale=X_PUESTO, axis=alt.Axis(values=list(range(1, 23)), orient="top", grid=True),
-               title="Puesto (1 = adelante)")
+               title="Puesto (1 = el primero)")
     tip_d = [alt.Tooltip("nombre:N", title="Piloto"), alt.Tooltip("equipo:N", title="Equipo"),
              alt.Tooltip("m:N", title="Momento"), alt.Tooltip("pos:Q", title="Dónde iba"),
-             alt.Tooltip("pred:Q", title="Lo que dijo el modelo", format=".1f"),
-             alt.Tooltip("esp:Q", title="Posición esperada (antes de ordenar)", format=".2f"),
-             alt.Tooltip("real:Q", title="Dónde terminó"), alt.Tooltip("sit:N", title="Situación"),
-             alt.Tooltip("error:Q", title="Error del modelo (puestos)", format=".1f"),
-             alt.Tooltip("muestra:N", title="Predicción")]
+             alt.Tooltip("pred:Q", title="Dónde dijo el modelo que terminaba", format=".1f"),
+             alt.Tooltip("real:Q", title="Dónde terminó"), alt.Tooltip("sit:N", title="Qué pasó"),
+             alt.Tooltip("error:Q", title="Puestos que se equivocó el modelo", format=".1f")]
     resalte = det.transform_filter("datum.tuyo").mark_bar(color="#fdf0c4", opacity=1).encode(
         y=Y_D, x=alt.X(datum=0.5, scale=X_PUESTO), x2=alt.X2(datum=22.5))
     mov = det.mark_rule(color="#d9d6cd", strokeWidth=2).encode(y=Y_D, x=alt.X("pos:Q", **X_D), x2="pred:Q")
@@ -583,7 +585,7 @@ def g_explora(e, pc, inicial):
         color=alt.Color("fin:N", scale=alt.Scale(domain=["terminó", "abandonó"], range=[TINTA, VINO]), legend=None))
     detalle = (resalte + mov + iba + dijo + real).properties(width=760, height=alt.Step(19))
     tablas = g_dos_tablas(sub, "pred", "piloto_e != 'Todos' && datum.piloto == piloto_e",
-                          tip_d, "Tabla que armó el modelo", "Tabla final")
+                          tip_d, "Lo que dijo el modelo", "Cómo terminó")
     return {"panorama": alt.vconcat(panorama, cab, spacing=14).add_params(momento, temporada, piloto, medida),
             "tablas": tablas.add_params(*libres), "detalle": alt.vconcat(detalle).add_params(*libres)}
 
@@ -595,12 +597,12 @@ def g_dos_tablas(sel, col_pred, tuyo, tip, izq, der, real="real", alto=21):
     """Dos columnas de puestos unidas por una línea por piloto: la tabla que arma una predicción y la de llegada."""
     t = (sel.transform_window(pp="row_number()", sort=[alt.SortField(col_pred), alt.SortField("pos")])
             .transform_calculate(dif=f"abs(datum.pp - datum.{real})", tuyo=tuyo,
-                                 grupo=("datum.fin == 'abandonó' ? 'abandonó' : datum.dif <= 1 ? 'acertó o erró por 1' : "
-                                        "datum.dif <= 4 ? 'erró por 2 a 4' : 'erró por 5 o más'"),
+                                 grupo=("datum.fin == 'abandonó' ? 'abandonó' : datum.dif <= 1 ? 'acertó (o le erró por 1)' : "
+                                        "datum.dif <= 4 ? 'le erró por 2 a 4' : 'le erró por 5 o más'"),
                                  izq="'P' + datum.pp + '  ' + datum.piloto", der=f"datum.piloto + '  P' + datum.{real}"))
     Y = dict(scale=alt.Scale(domain=[0.5, 22.5], reverse=True, nice=False, zero=False), axis=None, title=None)
     X = alt.Scale(domain=[-0.42, 1.42], nice=False, zero=False)
-    grupos = ["acertó o erró por 1", "erró por 2 a 4", "erró por 5 o más", "abandonó"]
+    grupos = ["acertó (o le erró por 1)", "le erró por 2 a 4", "le erró por 5 o más", "abandonó"]
     zonas = alt.Chart(pd.DataFrame({"a": [0.5, 3.5], "b": [3.5, 10.5], "t": ["podio", "zona de puntos (top 10)"],
                                     "c": ["#fdf0c4", "#f4f2ec"], "y": [2, 7]}))
     capas = [*[zonas.transform_filter(f"datum.c == '{col}'").mark_rect(color=col).encode(
@@ -660,14 +662,14 @@ def g_tabla(res):
 
 
 ENTRADA = {  # cómo se muestra cada entrada del modelo en los deslizadores de «Probá el modelo»
-    "posicion_al_corte": ("Dónde va (puesto)", 1, None),
-    "vueltas_detras": ("Vueltas detrás del líder (3 o más: ya abandonó)", 1, None),
-    "tendencia_10": ("Puestos ganados en las últimas 10 vueltas", 1, None),
-    "gap_qualy_pct": ("Qué tan lejos de la pole quedó en la qualy (%)", 0.1, None),
-    "log_puntos_equipo": ("Puntos del equipo antes de la carrera", 1, "log"),
-    "neumatico_vs_carrera": ("Vueltas de su neumático, contra la mitad del pelotón", 0.5, None),
-    "driver_standing_before": ("Puesto en el campeonato antes de la carrera", 1, None),
-    "log_puntos": ("Puntos del piloto antes de la carrera", 0.5, "log"),
+    "posicion_al_corte": ("Lugar en el que va", 1, None),
+    "vueltas_detras": ("Vueltas que le lleva el líder (3 o más: ya abandonó)", 1, None),
+    "tendencia_10": ("Lugares ganados en las últimas 10 vueltas (negativo: perdidos)", 1, None),
+    "gap_qualy_pct": ("Cuánto más lento que el más rápido fue en la clasificación (%)", 0.1, None),
+    "log_puntos_equipo": ("Puntos de su equipo en el campeonato", 1, "log"),
+    "neumatico_vs_carrera": ("Vueltas de uso de sus neumáticos, comparado con el resto (más = más gastados)", 0.5, None),
+    "driver_standing_before": ("Puesto en el campeonato", 1, None),
+    "log_puntos": ("Puntos del piloto en el campeonato", 0.5, "log"),
 }
 
 
@@ -684,21 +686,21 @@ def g_proba_tabla():
     """La tabla de «Probá»: dónde va cada piloto (izquierda) y dónde lo hace terminar el modelo (derecha).
     Los datos los pone la página cada vez que se mueve algo (conjunto «tabla»)."""
     t = (alt.Chart(alt.NamedData(name="tabla"))
-            .transform_calculate(cambio="datum.final < datum.pos ? 'gana puestos' : datum.final > datum.pos ? 'pierde puestos' : 'queda igual'",
+            .transform_calculate(cambio="datum.final < datum.pos ? 'gana lugares' : datum.final > datum.pos ? 'pierde lugares' : 'queda igual'",
                                  izq="'P' + datum.pos + '  ' + datum.piloto",
-                                 der="datum.lineal ? datum.piloto + '  P' + datum.final : datum.piloto + '  ≈' + format(datum.esp, '.1f')"))
+                                 der="datum.lineal ? datum.piloto + '  P' + datum.final : datum.piloto + '  ~' + format(datum.esp, '.0f')"))
     Y = dict(scale=alt.Scale(domain=[0.5, 22.5], reverse=True, nice=False, zero=False), axis=None, title=None)
     X = alt.Scale(domain=[-0.42, 1.42], nice=False, zero=False)
     tip = [alt.Tooltip("nombre:N", title="Piloto"), alt.Tooltip("equipo:N", title="Equipo"),
-           alt.Tooltip("pos:Q", title="Dónde va"), alt.Tooltip("esp:Q", title="Posición esperada", format=".2f"),
-           alt.Tooltip("final:Q", title="Puesto en la tabla del modelo")]
+           alt.Tooltip("pos:Q", title="Dónde va"), alt.Tooltip("esp:Q", title="Puesto que calcula el modelo (con decimales)", format=".1f"),
+           alt.Tooltip("final:Q", title="Dónde termina, según el modelo")]
     zonas = alt.Chart(pd.DataFrame({"a": [0.5, 3.5], "b": [3.5, 10.5], "c": ["#fdf0c4", "#f4f2ec"]}))
     capas = [*[zonas.transform_filter(f"datum.c == '{col}'").mark_rect(color=col).encode(
                  y=alt.Y("a:Q", **Y), y2="b:Q", x=alt.X(datum=-0.42, scale=X, axis=None, title=None), x2=alt.X2(datum=1.42))
                for col in ("#fdf0c4", "#f4f2ec")],
              t.mark_rule(strokeCap="round").encode(
                  x=alt.X(datum=0, scale=X, axis=None, title=None), x2=alt.X2(datum=1), y=alt.Y("pos:Q", **Y), y2="final:Q",
-                 color=alt.Color("cambio:N", scale=alt.Scale(domain=["gana puestos", "queda igual", "pierde puestos"],
+                 color=alt.Color("cambio:N", scale=alt.Scale(domain=["gana lugares", "queda igual", "pierde lugares"],
                                                              range=[AZUL, "#c4c1b6", TINTA]),
                                  legend=alt.Legend(title=None, orient="bottom", direction="horizontal")),
                  strokeWidth=alt.condition("datum.tuyo", alt.value(5), alt.value(2.2)), tooltip=tip),
@@ -718,14 +720,14 @@ def g_proba_aportes():
     Y = alt.Y("etq:N", sort=alt.EncodingSortField("v", order="ascending"), title=None,
               axis=alt.Axis(labelLimit=340, ticks=False, domain=False))
     barras = a.mark_bar(height=16, color=AZUL).encode(
-        y=Y, x=alt.X("v:Q", title="Puestos (negativo: lo adelanta · positivo: lo atrasa)"),
+        y=Y, x=alt.X("v:Q", title="← lo adelanta          lo atrasa → (lugares)"),
         opacity=alt.condition("datum.v < 0", alt.value(1), alt.value(0.45)),
-        tooltip=[alt.Tooltip("etq:N", title="Entrada"), alt.Tooltip("v:Q", title="Aporte (puestos)", format="+.2f")])
+        tooltip=[alt.Tooltip("etq:N", title="Dato"), alt.Tooltip("v:Q", title="Lugares que lo mueve", format="+.1f")])
     cero = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#8a877f").encode(x="x:Q")
     valores = a.mark_text(fontSize=11.5, fontWeight=600, color=TINTA, align="left").encode(
-        y=Y, x=alt.value(432), text=alt.Text("v:Q", format="+.2f"))
+        y=Y, x=alt.value(432), text=alt.Text("v:Q", format="+.1f"))
     return (cero + barras + valores).properties(width=420, height=alt.Step(26),
-                                      title="Cómo arma el modelo el número del piloto elegido")
+                                      title="Qué lo empuja hacia adelante y qué hacia atrás")
 
 
 PLANTILLA = r"""<!doctype html>
@@ -865,9 +867,11 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <h1>¿Dónde va a terminar cada piloto de Fórmula 1?</h1>
   <p class="idea">__IDEA__</p>
   <div class="kpis">__KPIS__</div>
-  <p class="guia">Predecimos el puesto oficial de llegada en cuatro momentos: antes de largar y cuando el líder completa
-  el 25, el 50 y el 75 % de las vueltas, con lo que se sabe hasta ese momento. Las tres secciones que siguen cuentan qué
-  encontramos; cada una tiene un «Cómo lo sabemos» con la evidencia. Al final, los datos y el modelo quedan en tus manos.</p>
+  <p class="guia">Un modelo es un programa que aprende de carreras pasadas para hacer predicciones sobre carreras nuevas.
+  El nuestro predice en qué puesto termina cada piloto en cuatro momentos: antes de la largada y cuando ya se corrió un cuarto,
+  la mitad y tres cuartos de la carrera, usando sólo lo que se sabe hasta ese momento. Abajo contamos qué datos usamos, qué
+  descubrimos y qué tan bien funciona; si querés ver las pruebas, abrí «Cómo lo sabemos» en cada parte. Al final podés
+  recorrer todas las carreras y probar el modelo vos mismo.</p>
 </section>
 
 <section id="datos">
@@ -875,7 +879,7 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <h2>__T_DATOS__</h2>
   <p class="lectura">__L_DATOS__</p>
   <div class="grafico" id="g-datos"></div>
-  <details class="como"><summary>Cómo lo sabemos <small>pipeline, filas, filtros y fuga</small></summary><div class="cuerpo">__C_DATOS__</div></details>
+  <details class="como"><summary>Cómo lo sabemos <small>de dónde salen los datos, qué filtramos y qué dejamos afuera</small></summary><div class="cuerpo">__C_DATOS__</div></details>
 </section>
 
 <section id="hallazgo">
@@ -883,7 +887,7 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <h2>__T_HALLAZGO__</h2>
   <p class="lectura">__L_HALLAZGO__</p>
   <div class="grafico" id="g-hallazgo"></div>
-  <details class="como"><summary>Cómo lo sabemos <small>una hipótesis que se sostuvo y una que no</small></summary><div class="cuerpo">__C_HALLAZGO__</div></details>
+  <details class="como"><summary>Cómo lo sabemos <small>una hipótesis que se sostuvo, una que no y cómo se midió</small></summary><div class="cuerpo">__C_HALLAZGO__</div></details>
 </section>
 
 <section id="modelo">
@@ -892,18 +896,18 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <p class="lectura">__L_MODELO__</p>
   <div class="grafico" id="g-modelo"></div>
   <p class="lectura">__L_TABLA__</p>
-  <details class="como"><summary>Cómo lo sabemos <small>métrica, validación, comparación, test, errores y en qué se apoya</small></summary><div class="cuerpo">__C_MODELO__</div></details>
+  <details class="como"><summary>Cómo lo sabemos <small>métrica, validación, comparación de modelos, test, errores y en qué se apoya</small></summary><div class="cuerpo">__C_MODELO__</div></details>
 </section>
 
 <section id="explora">
   <span class="parte">En tus manos · Explorá</span>
-  <h2>__CARRERAS_EXPLORA__ carreras, cada piloto con lo que dijo el modelo y lo que pasó</h2>
-  <p class="lectura">Arriba, el panorama: cada carrera medida con el error medio o con qué tanto se parece su tabla a la
-  final. Elegí el momento, achicá a una temporada o seguí a un piloto, y hacé clic en una carrera para abrirla abajo: como dos
-  tablas lado a lado o piloto por piloto. Pasá el mouse por cualquier punto o línea para ver el detalle, incluida la
-  predicción. Son __N_EXPLORA__ predicciones hechas por un modelo que no había visto esa carrera.</p>
+  <h2>Recorré las __CARRERAS_EXPLORA__ carreras: qué dijo el modelo de cada piloto y qué pasó de verdad</h2>
+  <p class="lectura">Arriba, cada punto es una carrera. Elegí el momento de la carrera (25 % quiere decir que ya se corrió
+  un cuarto de la carrera) y, si querés, una temporada o un piloto. Hacé clic en una carrera para abrirla abajo y comparar el orden que predijo el modelo con cómo terminó. Pasá el
+  mouse por los puntos y las líneas para ver el detalle de cada piloto. Todas estas predicciones las hizo el modelo sin
+  conocer el resultado de esa carrera.</p>
   <div class="controles">
-    <div class="control"><span class="titulo">Momento</span><div id="c-momento"></div></div>
+    <div class="control"><span class="titulo">Momento de la carrera</span><div id="c-momento"></div></div>
     <div class="control"><span class="titulo">Temporada</span><div id="c-temporada"></div></div>
     <div class="control"><span class="titulo">Seguir a un piloto</span><div id="c-piloto"></div></div>
     <div class="control"><span class="titulo">Medir cada carrera por</span><div id="c-medida"></div></div>
@@ -914,34 +918,31 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
       <button data-v="tablas" class="on">Las dos tablas</button><button data-v="det">Piloto por piloto</button></div></div>
   </div>
   <div class="vista-e" data-v="tablas">
-    <p class="nota">A la izquierda, la tabla que armó el modelo; a la derecha, la tabla final. Cada línea une a un piloto: si es
-    horizontal, acertó su puesto. Las punteadas son abandonos. Con esto se calculan Spearman, el podio y el top 10.</p>
+    <p class="nota">A la izquierda, el orden que predijo el modelo; a la derecha, cómo terminó la carrera. Cada línea une a un
+    piloto: si queda horizontal, el modelo acertó su puesto. Las líneas punteadas son pilotos que abandonaron.</p>
     <div class="grafico" id="g-explora-tablas"></div></div>
   <div class="vista-e" data-v="det" hidden>
     <div class="leyenda">
       <span><i class="pt" style="background:var(--naranja)"></i>dónde iba en ese momento (lo que dice «termina donde está»)</span>
-      <span><i class="pt" style="background:var(--azul)"></i>lo que dijo el modelo</span>
+      <span><i class="pt" style="background:var(--azul)"></i>dónde dijo el modelo que terminaba</span>
       <span><i class="rombo"></i>dónde terminó</span>
       <span><b class="cruz">✕</b>abandonó</span>
       <span><i class="franja"></i>el piloto que seguís</span>
     </div>
     <div class="grafico" id="g-explora-det"></div></div>
-  <p class="queToca"><strong>Qué toca cada control.</strong> El momento filtra las filas de todos los gráficos. La temporada
-  y el piloto filtran las filas antes de agrupar por carrera, así que cambian los puntos del panorama. «Medir cada carrera
-  por» cambia el campo del eje vertical: el error medio sale de promediar los pilotos; Spearman, de comparar la tabla entera.
-  El clic es una selección: elige la carrera que se abre abajo y agranda su punto. El piloto que seguís se resalta abajo.</p>
+  <details class="como"><summary>Cómo lo sabemos <small>qué predicciones son, cómo se mide cada carrera y qué toca cada control</small></summary><div class="cuerpo">__C_EXPLORA__</div></details>
 </section>
 
 <section id="proba">
   <span class="parte">En tus manos · Probá el modelo</span>
   <h2>Armá tu carrera: ordená a los pilotos y mirá dónde los hace terminar el modelo</h2>
-  <p class="lectura">Partí de una carrera real de 2026, que el modelo no vio al entrenar. A la izquierda está el orden en ese
-  momento: <strong>arrastrá a los pilotos</strong> (o usá las flechas) para cambiarlo, y <strong>hacé clic en un piloto</strong>
-  para cambiar sus otros datos. El modelo recalcula a todos con su fórmula, escrita en esta página, y a la derecha muestra la
-  tabla con la que terminarían. Los deslizadores sólo llegan hasta donde llegaron los datos de entrenamiento; si un valor real
-  queda afuera, la página avisa.</p>
+  <p class="lectura">Elegí una carrera de 2026 y un momento (25 % quiere decir que ya se corrió un cuarto de la carrera). A la izquierda está el orden de la carrera en ese momento:
+  <strong>arrastrá a los pilotos</strong> (o usá las flechas) para cambiarlo, y <strong>hacé clic en un piloto</strong> para
+  cambiar sus datos, como cuántas vueltas tienen sus neumáticos o cuántos puntos tiene en el campeonato. A la derecha, el
+  modelo te muestra en qué puesto terminaría cada uno. Si probás algo que nunca pasó en las carreras de las que aprendió el
+  modelo, la página te avisa.</p>
   <div class="controles">
-    <div class="control"><span class="titulo">Momento</span><div class="pastillas" id="p-momento">
+    <div class="control"><span class="titulo">Momento de la carrera</span><div class="pastillas" id="p-momento">
       <button data-k="0">Antes de largar</button><button data-k="25" class="on">25 %</button><button data-k="50">50 %</button><button data-k="75">75 %</button></div></div>
     <div class="control"><span class="titulo">Carrera de 2026</span><select id="p-carrera"></select></div>
     <div class="control"><button type="button" class="volver" id="p-volver">Volver a la carrera real</button></div>
@@ -950,15 +951,16 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <p class="titular" id="p-titular"></p>
   <p class="nota" id="p-nota"></p>
   <div class="proba">
-    <div class="col-lista"><div class="col-tit">Cómo va la carrera <small id="p-ayuda">arrastrá para reordenar</small></div>
+    <div class="col-lista"><div class="col-tit">Cómo va la carrera ahora <small id="p-ayuda">arrastrá para cambiar el orden</small><br><small>→ dónde termina según el modelo · ▲ gana lugares · ▼ pierde lugares</small></div>
       <ol class="lista" id="p-lista"></ol></div>
-    <div class="col-res"><div class="col-tit">Dónde los hace terminar el modelo</div>
+    <div class="col-res"><div class="col-tit">Cómo terminaría, según el modelo</div>
       <div class="grafico" id="g-proba"></div></div>
   </div>
   <p class="aviso" id="p-aviso" hidden></p>
-  <details class="como"><summary>Ver más <small>por qué el modelo pone al piloto elegido en ese puesto</small></summary>
+  <details class="como"><summary>Ver más <small>por qué el modelo pone al piloto elegido en ese lugar</small></summary>
     <div class="cuerpo"><p class="cuenta" id="p-apo-cuenta"></p><div class="grafico" id="g-proba-apo-caja"><div id="g-proba-apo"></div></div>
     <ol class="camino" id="p-camino" hidden></ol><p class="nota" id="p-apo-nota"></p></div></details>
+  <details class="como"><summary>Cómo lo sabemos <small>la fórmula, el modelo que se usa antes de largar y las reglas de esta sección</small></summary><div class="cuerpo">__C_PROBA__</div></details>
 </section>
 </main>
 <footer>
@@ -1003,11 +1005,11 @@ function predecir(k, orden, vals) {
     let cambio, partes = [];
     if (M.lineal) {
       cambio = M.lineal.intercepto;
-      partes.push(["punto de partida (constante)", M.lineal.intercepto]);
+      partes.push(["Ajuste general", M.lineal.intercepto]);
       for (const [c, w, mu, sd] of M.lineal.partes) {
         const a = w * (x[c] - mu) / sd; cambio += a;
         const v = pantalla(k, c, x[c]), d = M.rangos[c][2] < 1 ? 1 : 0;
-        partes.push([`${M.etq[c].replace(/ \(3 o más.*\)/, "")}: ${num(v, d)}`, a]);
+        partes.push([`${M.etq[c].replace(/ \([^)]*\)$/, "")}: ${num(v, d)}`, a]);
       }
     } else {
       let n = M.arbol;
@@ -1037,9 +1039,9 @@ function cargar() {
   if (!est.reales[est.abierto]) est.abierto = null;
   const M = PR.momentos[est.k];
   document.getElementById("p-modelo").textContent = M.tipo === "árbol"
-    ? "Antes de largar se prueba el árbol ajustado: el boosting elegido no se puede escribir en la página (ver «Cómo lo sabemos» del modelo)."
-    : "Regresión lineal elegida en la Entrega 3; del 25 % en adelante el modelo ordena a todos 1, 2, 3…";
-  document.getElementById("p-ayuda").textContent = est.k === "0" ? "arrastrá para cambiar la grilla" : "arrastrá para reordenar";
+    ? "Antes de la largada, el modelo responde preguntas de sí o no sobre cada piloto (por ejemplo, «¿larga entre los 8 primeros?»). Es una versión simplificada del modelo principal, que da casi lo mismo y se puede calcular en esta página."
+    : "El modelo le suma o le resta lugares a cada piloto según sus datos y después los ordena del primero al último.";
+  document.getElementById("p-ayuda").textContent = est.k === "0" ? "arrastrá para cambiar la grilla de largada" : "arrastrá para cambiar el orden";
   dibujarLista(); actualizar();
 }
 
@@ -1065,19 +1067,19 @@ function editor(p) {
   if (M.cols.includes("driver_standing_before")) {
     const info = document.createElement("div");
     info.className = "var";
-    info.innerHTML = `<label>Puesto en el campeonato antes de la carrera<output>P${Math.round(est.vals[p].driver_standing_before)}</output></label>` +
-      `<span class="rango">Sale de los puntos: al cambiarlos, se reordena el campeonato de todos los pilotos de la carrera.</span>`;
+    info.innerHTML = `<label>Puesto en el campeonato<output>${Math.round(est.vals[p].driver_standing_before)}.º</output></label>` +
+      `<span class="rango">Sale de los puntos: si los cambiás, se reordena el campeonato de todos.</span>`;
     caja.appendChild(info);
   }
-  if (!cols.length) caja.innerHTML = "<span class='rango'>En este momento el modelo sólo usa la posición: cambiala arrastrando.</span>";
+  if (!cols.length) caja.innerHTML = "<span class='rango'>En este momento el modelo sólo mira el lugar en el que va: cambialo arrastrando.</span>";
   for (const c of cols) {
     const [lo, hi, paso] = M.rangos[c], real = pantalla(est.k, c, est.reales[p].x[c]);
     const v = Math.min(hi, Math.max(lo, pantalla(est.k, c, est.vals[p][c])));
     const d = paso < 1 ? 1 : 0, div = document.createElement("div");
     div.className = "var";
     div.innerHTML = `<label>${M.etq[c]}<output>${num(v, d)}</output></label>
-      <input type="range" min="${lo}" max="${hi}" step="${paso}" value="${v}"><span class="rango">de ${num(lo, d)} a ${num(hi, d)} · real: ${num(real, d)}</span>` +
-      (real < lo || real > hi ? `<div class="fuera">⚠ El valor real (${num(real, d)}) está fuera de lo que vio el modelo al entrenar; el deslizador llega hasta ${num(real < lo ? lo : hi, d)}.</div>` : "");
+      <input type="range" min="${lo}" max="${hi}" step="${paso}" value="${v}"><span class="rango">valor real: ${num(real, d)} · se puede mover entre ${num(lo, d)} y ${num(hi, d)}</span>` +
+      (real < lo || real > hi ? `<div class="fuera">⚠ El valor real (${num(real, d)}) es más extremo que lo que vio el modelo cuando aprendió; el control llega hasta ${num(real < lo ? lo : hi, d)}.</div>` : "");
     const inp = div.querySelector("input"), out = div.querySelector("output");
     inp.addEventListener("input", () => { out.textContent = num(+inp.value, d); cambiar(p, c, modelo(est.k, c, +inp.value)); });
     inp.addEventListener("change", () => { if (c === "vueltas_detras" || c === "log_puntos") { dibujarLista(); actualizar(); } });
@@ -1094,7 +1096,7 @@ function actualizar() {
   lista.querySelectorAll("li").forEach(li => {
     const r = por[li.dataset.p], d = r.final - r.pos;
     li.querySelector("[data-va]").textContent = M.lineal
-      ? `→ P${r.final}` + (d < 0 ? ` ▲${-d}` : d > 0 ? ` ▼${d}` : "") : `→ ${num(r.esp)}`;
+      ? `→ P${r.final}` + (d < 0 ? ` ▲${-d}` : d > 0 ? ` ▼${d}` : "") : `→ ~${Math.round(r.esp)}`;
   });
   const filas = res.map(r => ({piloto: r.p, nombre: est.reales[r.p].nombre, equipo: est.reales[r.p].equipo,
     pos: r.pos, final: r.final, esp: Math.round(r.esp * 100) / 100, tuyo: r.p === est.abierto, lineal: !!M.lineal}));
@@ -1104,13 +1106,13 @@ function actualizar() {
   if (est.abierto) {
     const r = por[est.abierto];
     t.textContent = M.lineal
-      ? `${r.p}: va P${r.pos} → el modelo lo pone P${r.final} (posición esperada ${num(r.esp)})`
-      : `${r.p}: larga P${r.pos} → el modelo espera que llegue en el puesto ${num(r.esp)}`;
+      ? `${r.p} va ${r.pos}.º y, según el modelo, termina ${r.final}.º`
+      : `${r.p} larga ${r.pos}.º y, según el modelo, termina cerca del ${Math.round(r.esp)}.º puesto`;
   } else t.textContent = "Hacé clic en un piloto para ver y cambiar sus datos.";
   verMas(M, por);
   const aviso = document.getElementById("p-aviso"), n = est.orden.length;
   aviso.hidden = n <= M.max_pos;
-  aviso.textContent = `⚠ El modelo entrenó con carreras de ${M.max_pos} autos: los puestos ${M.max_pos + 1} a ${n} nunca los vio, así que para esos pilotos la fórmula extrapola.`;
+  aviso.textContent = `⚠ En 2026 hay ${n} autos, pero el modelo aprendió con carreras de ${M.max_pos}: para los puestos ${M.max_pos + 1}${n - M.max_pos === 2 ? " y " : " a "}${n} su predicción es menos confiable.`;
 }
 
 // Reglas para que la carrera siga siendo posible:
@@ -1135,24 +1137,28 @@ function verMas(M, por) {
   const filas = r && M.lineal ? r.partes.map(([etq, v]) => ({etq, v: Math.round(v * 1000) / 1000})) : [];
   if (a) a.change("aportes", vega.changeset().remove(() => true).insert(filas)).runAsync();
   caja.hidden = !(r && M.lineal); camino.hidden = !(r && !M.lineal);
-  if (!r) { cuenta.innerHTML = ""; notaV.textContent = "Hacé clic en un piloto de la lista para ver cómo arma el modelo su predicción."; return; }
-  const suma = r.esp - r.pos, signo = suma >= 0 ? "+" : "−";
-  const final = M.lineal ? ` → en la tabla del modelo queda <b>P${r.final}</b>` : "";
-  cuenta.innerHTML = `<strong>${r.p}</strong>: ${est.k === "0" ? "larga" : "va"} P${r.pos} ${signo} ${num(Math.abs(suma), 2)} puestos = ` +
-    `posición esperada <b>${num(r.esp, 2)}</b>${final}.`;
+  if (!r) { cuenta.innerHTML = ""; notaV.textContent = "Hacé clic en un piloto de la lista para ver por qué el modelo lo pone ahí."; return; }
+  const suma = r.esp - r.pos, mueve = Math.abs(suma) < 0.05 ? "no lo mueve" : (suma < 0 ? "lo adelanta " : "lo atrasa ") + num(Math.abs(suma), 1) + " lugares";
   if (M.lineal) {
-    notaV.textContent = "Cada barra es lo que aporta un dato, comparado con un piloto promedio de 2022–2025 " +
-      "(coeficiente × (valor − media) / desvío). Las que van a la izquierda lo adelantan; las de la derecha lo atrasan. " +
-      "La suma de todas es lo que se le suma a dónde va. Después, el modelo ordena a todos por su posición esperada.";
+    cuenta.innerHTML = `<strong>${r.p}</strong> va ${r.pos}.º. Sumando lo que aporta cada dato, el modelo ${mueve}: le calcula un puesto ` +
+      `de <b>${num(r.esp, 1)}</b>. Después ordena a todos los pilotos según ese número, y ${r.p} queda <b>${r.final}.º</b>.`;
+    notaV.textContent = "Cada barra muestra cuántos lugares lo adelanta o lo atrasa ese dato, comparado con un piloto típico de " +
+      "las carreras de 2022 a 2025. «Ajuste general» es una corrección fija que el modelo le hace a todos.";
   } else {
-    const txt = ([c, u, si, v]) => {
-      const nombre = M.etq[c], d = M.rangos[c][2] < 1 ? 1 : 0, umbral = d ? pantalla(est.k, c, u) : Math.floor(pantalla(est.k, c, u));
-      return `¿${nombre}: ${num(umbral, d)} o menos? <span class="${si ? "si" : "no"}">${si ? "Sí" : "No"}</span> (tiene ${num(pantalla(est.k, c, v), d)})`;
+    cuenta.innerHTML = `<strong>${r.p}</strong> larga ${r.pos}.º. Siguiendo las preguntas, el modelo ${mueve}: termina cerca del ` +
+      `<b>${Math.round(r.esp)}.º</b> puesto.`;
+    const pregunta = ([c, u, si, v]) => {
+      const ent = Math.floor(pantalla(est.k, c, u)), tiene = num(pantalla(est.k, c, v), c === "log_puntos" ? 1 : 0);
+      const q = c === "posicion_al_corte" ? `¿Larga ${ent}.º o más adelante?`
+        : c === "driver_standing_before" ? `¿Está ${ent}.º o mejor en el campeonato?`
+        : `¿Tiene ${ent} puntos o menos en el campeonato?`;
+      const dato = c === "posicion_al_corte" ? `larga ${tiene}.º` : c === "driver_standing_before" ? `está ${tiene}.º` : `tiene ${tiene}`;
+      return `${q} <span class="${si ? "si" : "no"}">${si ? "Sí" : "No"}</span> (${dato})`;
     };
-    camino.innerHTML = r.partes.map(q => `<li>${txt(q)}</li>`).join("") +
-      `<li>Fin del camino: ${suma < 0 ? "gana " + num(-suma, 1) + " puestos" : suma > 0 ? "pierde " + num(suma, 1) + " puestos" : "no gana ni pierde puestos"}.</li>`;
-    notaV.textContent = "Antes de largar el modelo de esta página es un árbol: no suma aportes, hace preguntas encadenadas " +
-      "sobre los datos del piloto. Estas son las que respondió este piloto, en orden; la última hoja dice cuántos puestos gana o pierde.";
+    camino.innerHTML = r.partes.map(q => `<li>${pregunta(q)}</li>`).join("") +
+      `<li>Resultado: ${suma <= -0.05 ? "gana " + num(-suma, 1) + " lugares" : suma >= 0.05 ? "pierde " + num(suma, 1) + " lugares" : "termina en el mismo lugar en el que larga"}.</li>`;
+    notaV.textContent = "Antes de la largada, el modelo de esta página es un árbol de preguntas: va respondiendo sí o no sobre el " +
+      "piloto, y cada camino termina en cuántos lugares gana o pierde. Estas son las preguntas que respondió este piloto.";
   }
 }
 
@@ -1168,10 +1174,12 @@ function mover(p, destino) {
     const lo = arriba ? vd(arriba) : 0, hi = abajo ? vd(abajo) : Infinity, v = vd(p);
     if (v < lo || v > hi) {
       est.vals[p].vueltas_detras = Math.min(hi, Math.max(lo, v));
-      t = `Para que ${p} pueda ir P${destino + 1}, ahora tiene ${est.vals[p].vueltas_detras} vuelta(s) detrás del líder, como los que lo rodean. `;
+      t = est.vals[p].vueltas_detras
+        ? `Para que ${p} pueda ir ${destino + 1}.º, el líder le lleva ahora ${est.vals[p].vueltas_detras} vuelta(s), como a los que tiene alrededor: nadie puede ir adelante de un auto que dio más vueltas. `
+        : `Para que ${p} pueda ir ${destino + 1}.º, lo pusimos en la misma vuelta que el líder: nadie puede ir adelante de un auto que dio más vueltas. `;
     }
   }
-  if (tiene("tendencia_10")) t += `Los puestos que ganó o perdió cada piloto al moverlo se sumaron a sus «puestos ganados en las últimas 10 vueltas».`;
+  if (tiene("tendencia_10")) t += `Los lugares que ganó o perdió cada piloto con el cambio cuentan como lugares ganados o perdidos en las últimas vueltas.`;
   nota(t);
   dibujarLista(); actualizar();
 }
@@ -1180,12 +1188,12 @@ function cambiar(p, c, v) {
   if (c === "log_puntos_equipo") {           // es del equipo: los dos pilotos
     const eq = est.reales[p].equipo;
     est.orden.forEach(q => { if (est.reales[q].equipo === eq) est.vals[q][c] = v; });
-    nota(`Los puntos del equipo cambiaron para los dos pilotos de ${eq}.`);
+    nota(`Los puntos son del equipo: cambiaron para los dos pilotos de ${eq}.`);
   } else est.vals[p][c] = v;
   if (c === "log_puntos") {                  // el campeonato se reordena con los puntos
     const orden = [...est.orden].sort((a, b) => est.vals[b].log_puntos - est.vals[a].log_puntos);
     orden.forEach(q => { est.vals[q].driver_standing_before = 1 + orden.findIndex(r => est.vals[r].log_puntos === est.vals[q].log_puntos); });
-    nota(`${p} queda P${est.vals[p].driver_standing_before} en el campeonato con esos puntos.`);
+    nota(`Con esos puntos, ${p} queda ${est.vals[p].driver_standing_before}.º en el campeonato.`);
   }
   if (c === "vueltas_detras") {              // lo ubica donde puede ir con esas vueltas
     const otros = est.orden.filter(q => q !== p), vd = q => est.vals[q].vueltas_detras;
@@ -1193,7 +1201,7 @@ function cambiar(p, c, v) {
     const i = est.orden.indexOf(p), j = Math.min(b, Math.max(a, i));
     if (j !== i) {
       otros.splice(j, 0, p); reordenar(otros);
-      nota(`Con ${v} vuelta(s) detrás, ${p} no puede ir adelante de pilotos con menos vueltas: pasa al P${j + 1}.`);
+      nota(`Si el líder le lleva ${v} vuelta(s), ${p} no puede ir adelante de autos que dieron más vueltas: pasa al ${j + 1}.º lugar.`);
     }
   }
   actualizar();
@@ -1285,53 +1293,74 @@ NOMBRE_COL = {"posicion_al_corte": "dónde va (puesto)", "vueltas_detras": "vuel
 
 
 def textos(R, N, corr):
+    """Lo que se lee fuera de «Cómo lo sabemos»: pensado para alguien que no cursó la materia."""
     C, T, el = R["comparacion"], R["test"], DECISIONES["elegido"]
     M = (0.0, 0.25, 0.5, 0.75)
     mod = {m: C[m][el[m]].mean() for m in M}
     regla = {m: C[m]["regla"].mean() for m in M}
     ventaja = {m: regla[m] - mod[m] for m in M}
     gana_test = [m for m in M if T[m]["modelo"] < T[m]["regla"]]
+    pierde_test = [m for m in M if T[m]["modelo"] >= T[m]["regla"]]
     rho = corr.pivot(index="momento", columns="serie", values="rho")
     rv = lambda mm: rho.loc[ETIQUETA[mm], "dónde va en ese momento"]
-    z = {}
-    z["idea"] = (f"Dónde va un piloto dice casi todo sobre dónde termina; el modelo afina esa posición con lo que pasa en "
-                 f"pista y erra entre {f(mod[0.0], 1)} puestos antes de largar y {f(mod[0.75], 1)} al 75 % de la carrera, "
-                 f"siempre algo menos que suponer que el piloto termina donde está.")
-    z["kpis"] = [(f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}", "puestos de error del modelo, de antes de largar al 75 % de la carrera (validación 2022–2025)"),
-                 (f(ventaja[0.0]), f"puestos menos que «termina donde está» antes de largar, en los 5 cortes; al 75 % la ventaja baja a {f(ventaja[0.75])}"),
-                 (f"{len(gana_test)} de 4", "momentos en que esa ventaja se sostuvo en las 14 carreras de 2026: "
-                  + " y ".join(ETIQUETA[m].lower() if m == 0 else f"al {ETIQUETA[m]}" for m in gana_test))]
-    # tallo
-    z["t_datos"] = ("La mitad de los pilotos termina a dos puestos o menos de donde larga; los que se alejan mucho son, "
-                    "sobre todo, los que abandonan")
-    z["l_datos"] = (f"La franja del medio junta al {pct(N['cerca'])} de los {n(N['por_momento'])} pilotos-carrera: llegaron a "
-                    f"dos puestos o menos de su lugar de largada. A la derecha está lo que ningún dato anterior anticipa: los "
-                    f"{n(N['abandonos'])} abandonos ({pct(N['abandonos_pct'])}) caen {f(N['caida_abandono'], 1)} puestos de "
-                    f"media y son {pct(N['grandes_abandono'])} de los que pierden cinco o más. Por eso medimos el error en "
-                    f"puestos, con el error absoluto: esos saltos existen, pero no deberían mandar.")
-    z["t_hallazgo"] = ("A partir del 25 % de la carrera, el lugar en el que va un piloto dice más de su llegada que el "
-                       "campeonato y el equipo")
-    z["l_hallazgo"] = (f"Antes de largar, la grilla ({f(rv(0.0))}) y el campeonato "
-                       f"({f(rho.loc[ETIQUETA[0.0], 'puesto en el campeonato'])}) dicen casi lo mismo. Después, la línea "
-                       f"naranja sube en cada momento hasta {f(rv(0.75))} al 75 %, mientras que lo que se sabía antes de "
-                       f"largar no cambia. Por eso hay un modelo por momento, y por eso «termina donde está» es el rival "
-                       f"a vencer: cada vez es más difícil de mejorar.")
-    momentos_test = " y ".join(ETIQUETA[m].lower() if m == 0 else f"al {ETIQUETA[m]}" for m in gana_test)
-    z["t_modelo"] = (f"El modelo erra entre {f(mod[0.0], 1)} y {f(mod[0.75], 1)} puestos y le gana a «termina donde está» "
-                     f"en los cuatro momentos; en 2026, la ventaja se sostuvo {momentos_test}")
-    z["l_modelo"] = (f"Mirá la distancia entre cada punto azul y su naranja: es lo que agrega el modelo. Antes de largar le "
-                     f"saca {f(ventaja[0.0])} puestos a la regla; al 75 % apenas {f(ventaja[0.75])}, menos que el desvío de "
-                     f"cualquiera de los dos. Los rombos son el test: en 2026 el modelo erró {f(T[0.0]['modelo'])} antes de "
-                     f"largar contra {f(T[0.0]['regla'])} de la regla, y al 75 % perdió ({f(T[0.75]['modelo'])} contra "
-                     f"{f(T[0.75]['regla'])}). Los dos quedan muy lejos del piso.")
     tr = R["tabla_res"].set_index("momento")
-    cortes = int(tr["spearman_cortes"].min())
-    z["l_tabla"] = (f"Mirada como tabla de posiciones, la del modelo se parece más a la final que la de la regla en "
-                    f"{'los 5 cortes de cada momento' if cortes == 5 else f'al menos {cortes} de los 5 cortes de cada momento'} "
-                    f"(Spearman {f(tr.loc['Antes de largar', 'spearman_m_val'])} contra "
-                    f"{f(tr.loc['Antes de largar', 'spearman_r_val'])} antes de largar), y acierta "
-                    f"{f(10 * tr.loc['Antes de largar', 'top10_m_val'], 0)} de cada 10 pilotos de la zona de puntos. El podio "
-                    f"casi no cambia: los que van adelante suelen terminar adelante. En 2026 las dos tablas quedan casi iguales.")
+    top10 = f(10 * tr.loc["Antes de largar", "top10_m_val"], 0)
+    cuando = {0.0: "antes de la largada", 0.25: "a un cuarto de carrera", 0.5: "a mitad de carrera",
+              0.75: "a tres cuartos de carrera"}
+    z = {}
+    z["idea"] = (f"El lugar en el que va un piloto dice casi todo sobre dónde va a terminar, y nuestro modelo lo afina con lo que pasa "
+                 f"en la pista: se equivoca en promedio {f(mod[0.0], 1)} puestos antes de la largada y {f(mod[0.75], 1)} "
+                 f"a tres cuartos de carrera, un poco menos que si supusiéramos que nadie cambia de lugar.")
+    z["kpis"] = [(f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}",
+                  "puestos que se equivoca el modelo, en promedio: antes de la largada y a tres cuartos de carrera"),
+                 (f"{top10} de 10",
+                  "pilotos que el modelo pone en la zona de puntos antes de la largada y terminan ahí"),
+                 (f"{f(T[0.0]['modelo'], 1)}",
+                  f"puestos de error, antes de la largada, en las {N['carreras_test']} carreras de 2026: carreras que el "
+                  f"modelo nunca había visto, y aun así se equivoca casi lo mismo")]
+    # 1 · Los datos
+    z["t_datos"] = ("Más de la mitad de los pilotos termina a dos lugares o menos de donde largó; los que pierden muchos "
+                    "lugares son, casi siempre, los que abandonan")
+    z["l_datos"] = (f"Juntamos los datos de {N['carreras']} carreras de Fórmula 1, de 2022 a 2026: la grilla de largada, "
+                    f"el campeonato y lo que hizo cada piloto vuelta por vuelta. El gráfico cuenta cuántos lugares ganó o "
+                    f"perdió cada piloto entre la largada y la llegada. La franja del medio junta al {pct(N['cerca'])} de "
+                    f"los casos: terminaron a dos lugares o menos de donde largaron. A la izquierda quedan los que "
+                    f"perdieron muchos lugares, y casi todos son abandonos: un auto que se rompe o choca termina al fondo. "
+                    f"Eso no lo puede anticipar nadie, y va a ser la mayor fuente de error de cualquier predicción.")
+    # 2 · Lo que encontramos
+    z["t_hallazgo"] = ("Desde el primer cuarto de carrera, el lugar en el que va un piloto anticipa su llegada mejor que "
+                       "el campeonato y que su equipo")
+    z["l_hallazgo"] = (f"Para cada dato medimos qué tan bien anticipa el orden de llegada: 1 sería acertar el orden exacto y "
+                       f"0, nada que ver. Antes de la largada, el lugar en la grilla ({f(rv(0.0))}) y el puesto en el "
+                       f"campeonato ({f(rho.loc[ETIQUETA[0.0], 'puesto en el campeonato'])}) anticipan más o menos lo "
+                       f"mismo. Pero a medida que avanza la carrera, el lugar en el que va cada piloto (la línea naranja) "
+                       f"se parece cada vez más al resultado final: llega a {f(rv(0.75))} a tres cuartos de carrera, "
+                       f"mientras que lo que se sabía antes de largar se queda igual. Por eso armamos un modelo distinto "
+                       f"para cada momento de la carrera. Y por eso nuestro rival es la regla «termina donde está»: "
+                       f"suponer que cada piloto llega en el mismo lugar en el que va. Es simple, pero difícil de superar.")
+    # 3 · El modelo
+    def lista_momentos(ms):
+        return " y ".join(cuando[m] for m in ms)
+    perdidas = "; ".join(
+        (f"{cuando[m]} empataron prácticamente" if T[m]["modelo"] - T[m]["regla"] < 0.05 else
+         f"{cuando[m]} la regla fue mejor, por {f(T[m]['modelo'] - T[m]['regla'], 1)} puestos")
+        for m in pierde_test)
+    z["t_modelo"] = (f"El modelo se equivoca menos que suponer que nadie cambia de lugar, sobre todo al principio de la "
+                     f"carrera; en las carreras nuevas de 2026, esa ventaja se mantuvo en {len(gana_test)} de los 4 momentos")
+    z["l_modelo"] = (f"Comparamos tres formas de predecir. Adivinar a ciegas (decir que todos terminan en el medio del "
+                     f"pelotón) se equivoca en {f(C[0.0]['piso'].mean(), 0)} puestos. La regla «termina donde está» (cada "
+                     f"piloto llega en el lugar en el que va o, antes de la largada, en el que larga) ya es mucho mejor: "
+                     f"se equivoca {f(regla[0.0], 1)} puestos antes de largar y {f(regla[0.75], 1)} a tres cuartos de "
+                     f"carrera. Nuestro modelo (los puntos azules) parte de esa misma idea y la corrige con otros datos: "
+                     f"el campeonato, cuántas vueltas detrás del líder va cada uno, si viene ganando o perdiendo lugares "
+                     f"y qué tan gastados tiene los neumáticos. Así baja a {f(mod[0.0], 1)} y {f(mod[0.75], 1)}. La "
+                     f"ventaja es más grande al principio y se achica al final, cuando queda poca carrera para cambiar de "
+                     f"lugar. Los rombos son las {N['carreras_test']} carreras de 2026, que el modelo nunca había visto: "
+                     f"ganó {lista_momentos(gana_test)}; {perdidas}.")
+    z["l_tabla"] = (f"También miramos la tabla completa de cada carrera, para ver si el orden que arma el modelo se parece "
+                    f"al orden final. Antes de la largada, de los 10 pilotos que el modelo pone en la zona de puntos, "
+                    f"{top10} terminan ahí. El podio, en cambio, casi no lo mejora: los que van adelante suelen terminar "
+                    f"adelante, y eso ya lo sabe cualquiera.")
     return z, mod, regla, ventaja
 
 
@@ -1370,9 +1399,12 @@ larga desde boxes va último.</p>
 <code>laps_total</code> parecía el largo de la carrera, pero son las vueltas que completó cada piloto (coincide en el 100 % de
 las filas): también es fuga.</p>
 <h4>Cómo se armó el gráfico</h4>
-<p>Datos: las {n(N['por_momento'])} filas de antes de largar. Transformación: llegada − largada, contada por valor y por
-situación. Marca: barras apiladas. Color: abandonó (estado distinto de «Finished» o «+N Lap») contra terminó; el mismo
-color marca a los que abandonaron en toda la página.</p>"""
+<p>Datos: las {n(N['por_momento'])} filas de antes de largar (en el texto, «casos»: un piloto en una carrera).
+Transformación: lugares ganados = lugar de largada − puesto de llegada, contados por valor y por situación; positivo es
+ganar lugares. Marca: barras apiladas. Color: abandonó (estado distinto de «Finished» o «+N Lap») contra terminó; el mismo
+color marca a los que abandonaron en toda la página. La franja del medio son los casos con un cambio de 2 lugares o menos
+({pct(N['cerca'])}). Los abandonos pierden {f(N['caida_abandono'], 1)} lugares de media y son {pct(N['grandes_abandono'])}
+de los que pierden 5 o más.</p>"""
 
 
 def como_hallazgo(corr):
@@ -1387,9 +1419,16 @@ y gana claro en los cinco cortes. Desde el 25 % ya no aporta: lo que decía, la 
 imprescindible. Pero con la posición y el campeonato adentro no le gana claro al modelo sin él en ningún momento. Una
 explicación posible: lo que vale cada equipo cambia de temporada en temporada, y al 25 % la fuerza del auto entra mejor por
 los puntos del equipo y el tiempo de qualy.</p>
+<p>También probamos una versión más gruesa: una sola columna <code>equipo_top</code> (1 si el equipo está entre los 4 con
+más puntos antes de esa carrera; en la primera fecha, el orden final de la temporada anterior). Separa bien a los pilotos
+(los de equipo top llegan, en promedio, 6,5.º; el resto, 13,1.º), pero tampoco gana claro en ningún momento:
+{tabla(["Momento", "Mejora media (puestos)", "Desvío de la mejora", "Cortes en que mejora"],
+       [[ETIQUETA[m], f(a, 3), f(b, 3), f"{c} de 5"] for m, (a, b, c) in s["equipo_top"].items()], "num")}
+Lo que dice el equipo ya lo dicen el campeonato, los puntos del equipo, la qualy y, sobre todo, la posición en pista.</p>
 <h4>Cómo se construyó el gráfico</h4>
-<p>Datos: 2022–2025 (el test no se mira), un valor por momento. Transformación: la correlación de Spearman entre el puesto de
-llegada y cada dato, que compara órdenes y no distancias. «Dónde va» es la posición rehecha en cada corte (antes de largar,
+<p>Lo que el gráfico llama «qué tan bien anticipa el orden de llegada» es la correlación de Spearman entre el puesto de
+llegada y cada dato: compara órdenes, no distancias (1 = mismo orden; 0 = sin relación). Datos: 2022–2025 (el test no se
+mira), 1.826 pilotos-carrera por momento, un valor por momento. «Dónde va» es la posición rehecha en cada corte (antes de largar,
 la grilla); el puesto del equipo sale de ordenar a los equipos de cada carrera por los puntos que sumaban sus pilotos antes
 de esa carrera. Las dos líneas grises son planas porque son datos de antes de largar: valen lo mismo en los cuatro
 momentos. El eje empieza en 0,4 porque las tres series viven entre 0,5 y 0,9; es un gráfico de líneas, no de barras.</p>"""
@@ -1447,9 +1486,9 @@ def como_modelo(R, mod, regla):
              f"{T[m]['mejor']} / {T[m]['igual']} / {T[m]['peor']}"] for m in M]
     S = R["situacion"]
     sit = []
-    for s_ in ["terminó", "abandonó después", "ya había abandonado"]:
-        fila = [{"terminó": "terminó la carrera", "abandonó después": "abandonó después del corte",
-                 "ya había abandonado": "ya había abandonado al corte"}[s_]]
+    for s_ in ["terminó", "abandonó más adelante", "ya había abandonado en ese momento"]:
+        fila = [{"terminó": "terminó la carrera", "abandonó más adelante": "abandonó después del corte",
+                 "ya había abandonado en ese momento": "ya había abandonado al corte"}[s_]]
         for m in M:
             r = S[(S["m"] == m) & (S["sit"] == s_)]
             fila.append("—" if r.empty else f"{f(r['modelo'].iloc[0])} / {f(r['regla'].iloc[0])} <span class='n'>({int(r['n'].iloc[0])})</span>")
@@ -1463,8 +1502,8 @@ def como_modelo(R, mod, regla):
     imp_t = [[NOMBRE_COL[c]] + [f(imp[m][c], 3) if c in imp[m] else "—" for m in M] for c in cols_imp]
     arbol = R["proba"][0.0]["mae"]
     bo = C[0.0]["boosting"]
-    sit_d = S[S["sit"] == "abandonó después"]
-    ya25 = S[(S["m"] == 0.25) & (S["sit"] == "ya había abandonado")]["modelo"].iloc[0]
+    sit_d = S[S["sit"] == "abandonó más adelante"]
+    ya25 = S[(S["m"] == 0.25) & (S["sit"] == "ya había abandonado en ese momento")]["modelo"].iloc[0]
     return f"""
 <h4>La métrica, y por qué</h4>
 <p>El MAE en puestos: si un piloto llega 5.º y el modelo dijo 3.º, el error es 2. Se lee directo y cada puesto pesa lo mismo.
@@ -1474,6 +1513,11 @@ error cuadrático esos pocos casos dominarían el número.</p>
 <p>El piso es decir siempre el puesto del medio: erra {f(C[0.0]['piso'].mean())} puestos (en 2026, con 22 autos,
 {f(T[0.0]['piso'])}). El rival de verdad es «termina donde está»: cada piloto llega en el puesto que tiene en ese momento
 (antes de largar, el de la grilla). Erra {", ".join(f"{f(regla[m])} {('antes de largar' if m == 0 else 'al ' + ETIQUETA[m])}" for m in M)}.</p>
+<h4>Qué muestra el gráfico de arriba</h4>
+<p>Cada punto es el MAE medio de los 5 cortes de la validación (2022–2025); cada rombo, el MAE en el test (2026). «Adivinar a
+ciegas» es el piso del notebook (predecir siempre la mediana del entrenamiento); «termina donde está» es la regla ingenua
+(predecir el puesto al corte; antes de largar, la grilla). El desvío entre cortes de cada número está en la tabla de
+comparación de más abajo. En el texto se redondea a un decimal.</p>
 <h4>Cómo se armó la validación</h4>
 <p>Las filas no son independientes: unos 20 pilotos por carrera forman un orden, y el modelo sirve para carreras que todavía no
 se corrieron. Por eso el test son las 14 carreras de 2026, y la validación sobre 2022–2025 usa <code>TimeSeriesSplit</code>
@@ -1511,12 +1555,88 @@ abandonado, que no pueden ganar puestos (el error de {f(ya25)} de esa fila, dond
 la posición de la pantalla de tiempos al cerrar la vuelta de corte, se arma sólo con vueltas hasta el corte y, si tuviera la
 respuesta adentro, la regla no erraría entre {f(regla[0.75])} y {f(regla[0.0])} puestos.</p>
 <h4>El modelo que se prueba en esta página</h4>
-<p>En el navegador no corre Python. Del 25 % en adelante el modelo elegido es una regresión lineal, y su fórmula está escrita
-en la página tal cual (coeficientes, medias y desvíos del escalado). Antes de largar el elegido es un boosting de 100 árboles,
-que no se puede escribir así. Para «Probá el modelo» usamos el <strong>árbol ajustado</strong> (max_depth=6,
-min_samples_leaf=30): erra {f(arbol.mean(), 3)} ± {f(arbol.std(), 3)} contra {f(bo.mean(), 3)} ± {f(bo.std(), 3)} del boosting.
-La diferencia, {f(arbol.mean() - bo.mean(), 3)} puestos, es menor que un desvío del boosting ({f(bo.std(), 3)}), y el árbol
-se escribe como preguntas encadenadas. En «Explorá» y en todo el tallo, los números son los del boosting.</p>"""
+<p>Antes de largar, «Probá el modelo» usa un árbol en lugar del boosting elegido, porque el boosting no se puede escribir
+en la página. Los números y la justificación están en el «Cómo lo sabemos» de esa sección. En «Explorá» y en todo el
+tallo, los números son los del boosting.</p>"""
+
+
+
+def como_explora(R, N, e):
+    pc = R["tabla_pc"]
+    return f"""
+<h4>Qué predicciones se muestran</h4>
+<p>Todas son <strong>fuera de muestra</strong>: ningún modelo vio la carrera que predice. Para 2022–2025 son las predicciones
+de la validación: cada carrera validada la predice el modelo del corte de <code>TimeSeriesSplit</code> que entrenó sólo con
+carreras anteriores ({N['validadas']} carreras). Para 2026 son las del test: el modelo entrenado con 2022–2025 predice las
+{N['carreras_test']} carreras una sola vez. Las primeras {N['solo_entrenan']} carreras de 2022 no aparecen porque la
+validación por fecha nunca las valida (siempre entrenan). En total, {n(len(e))} predicciones: {e['c'].nunique()} carreras
+× 4 momentos × los pilotos de cada una. Antes de largar el modelo es el boosting y la predicción es una posición esperada
+(con decimales); desde el 25 % es la regresión lineal y la predicción es el orden de llegada 1, 2, 3…</p>
+<h4>Cómo se mide cada carrera</h4>
+<p>«Cuántos puestos se equivoca» es el MAE de esa carrera: el promedio de |predicción − puesto final| sobre sus pilotos (con un
+piloto elegido, es el error de ese piloto en esa carrera). «Qué tan parecida queda la tabla» es la correlación de Spearman
+entre el puesto que le da la tabla predicha a cada piloto (ordenando por la predicción y, si empatan, por dónde va) y su
+puesto final; con un piloto elegido sigue siendo la de la carrera entera. El podio y la zona de puntos del encabezado cuentan
+cuántos de los 3 y de los 10 primeros predichos terminaron ahí. A la regla «termina donde está» se le calcula lo mismo,
+usando como predicción la posición en ese momento (antes de largar, la grilla). Son {len(pc)} combinaciones de carrera y
+momento; sus promedios por momento son los de la tabla completa en el «Cómo lo sabemos» del modelo.</p>
+<h4>Las dos vistas de la carrera</h4>
+<p>«Las dos tablas»: a la izquierda, los pilotos ordenados por la predicción; a la derecha, por el puesto final. El color de
+cada línea es la diferencia entre el puesto predicho y el real (1 o menos, 2 a 4, 5 o más); punteada si abandonó (estado
+distinto de «Finished» o «+N Lap»). «Piloto por piloto»: naranja, la posición en ese momento (lo que predice la regla); azul,
+lo que dijo el modelo; rombo, el puesto final; cruz, abandono.</p>
+<h4>Qué toca cada control</h4>
+<p>El momento filtra las filas de todos los gráficos. La temporada y el piloto filtran las filas antes de agrupar por carrera,
+así que cambian los puntos del panorama (y el piloto se resalta abajo). «Medir cada carrera por» cambia el campo del eje
+vertical del panorama: el MAE sale de promediar los pilotos; Spearman, de un cálculo por carrera hecho en Python y unido por
+carrera y momento. El clic es una selección de Vega-Lite: elige la carrera que se abre abajo y agranda su punto.</p>"""
+
+
+def como_proba(R):
+    C = R["comparacion"]
+    arbol, bo = R["proba"][0.0]["mae"], C[0.0]["boosting"]
+    filas = []
+    for m in (0.25, 0.5, 0.75):
+        T_ = R["proba"][m]["terminos"]
+        filas.append([ETIQUETA[m], "constante (ajuste general)", f(T_["intercepto"], 3), "—", "—"])
+        for c, w, mu, sd in T_["partes"]:
+            filas.append(["", NOMBRE_COL[c], f(w, 3), f(mu, 2), f(sd, 2)])
+    return f"""
+<h4>De dónde salen los pilotos y sus datos</h4>
+<p>Cada carrera es una de las {R['proba'][0.25]['filas']['c'].nunique()} de 2026 (el test), con los datos de cada piloto tal
+como los arma el pipeline en ese momento: la posición rehecha, las columnas derivadas (vueltas detrás del líder, tendencia de
+10 vueltas, neumático contra la mediana de la carrera, puntos del equipo en log) y, si falta algún valor, la mediana del
+entrenamiento, igual que el imputador del pipeline.</p>
+<h4>La fórmula, del 25 % en adelante</h4>
+<p>Es la regresión lineal elegida, entrenada con 2022–2025 (la misma que dio el test). Para cada piloto:
+posición esperada = posición + constante + Σ coeficiente × (valor − media) / desvío, con la media y el desvío del
+<code>StandardScaler</code>. Después se ordena a todos los pilotos de la carrera por la posición esperada (si empatan, por
+posición) y eso da el puesto 1, 2, 3… Cada término de la suma es una barra de «Ver más»; la constante es el «ajuste
+general». Los números que usa la página:</p>
+{tabla(["Momento", "Entrada", "Coeficiente", "Media", "Desvío"], filas, "num")}
+<p class="nota">Los puntos del equipo entran como log(1 + puntos), igual que en el notebook; el control los muestra en
+puntos. Al construir la página se comprueba que esta fórmula reproduce a scikit-learn en todas las filas de 2026 (diferencia
+menor a 0,000001) y que el orden coincide con el del modelo.</p>
+<h4>Antes de largar: un árbol en lugar del boosting</h4>
+<p>En el navegador no corre Python, y el boosting elegido (100 árboles) no se puede escribir en la página. El instructivo
+permite usar un modelo que sí se pueda llevar si queda a menos de un desvío del mejor. Usamos el <strong>árbol
+ajustado</strong> de la Entrega 3 (max_depth=6, min_samples_leaf=30): erra {f(arbol.mean(), 3)} ± {f(arbol.std(), 3)} contra
+{f(bo.mean(), 3)} ± {f(bo.std(), 3)} del boosting. La diferencia, {f(arbol.mean() - bo.mean(), 3)} puestos, es menor que un
+desvío del boosting ({f(bo.std(), 3)}). El árbol viaja en la página como preguntas encadenadas (con los umbrales pasados de
+la escala estandarizada a las unidades originales), y es el camino que muestra «Ver más». También se comprueba contra
+scikit-learn al construir la página.</p>
+<h4>Los límites de los controles</h4>
+<p>Los controles sólo llegan hasta valores que el modelo vio al entrenar. En las tres entradas con colas largas (lugares
+ganados en 10 vueltas, distancia a la pole y neumático contra la carrera) van del percentil 1 al 99 de 2022–2025, para que
+los extremos raros no inutilicen el control; en el resto, del mínimo al máximo. Si el valor real de un piloto queda afuera, la
+página lo avisa y lo lleva al borde. La posición llega hasta 20 porque 2022–2025 tenía 20 autos; en 2026 hay 22, y para los
+puestos 21 y 22 la fórmula extrapola, con un aviso.</p>
+<h4>Las reglas que mantienen la carrera posible</h4>
+<p>La posición en carrera se ordena primero por vueltas completadas, así que nadie puede ir adelante de un auto con menos
+vueltas detrás del líder: al arrastrar se ajustan sus vueltas detrás, y al cambiarlas se lo reubica. Moverse en la lista son
+lugares ganados o perdidos ahora, y se suman a la tendencia de 10 vueltas de cada piloto afectado. Los puntos del equipo
+cambian para los dos pilotos. Antes de largar, el puesto en el campeonato sale de ordenar a los pilotos de la carrera por sus
+puntos.</p>"""
 
 
 R_EXPLORA_TRAIN = [0]
@@ -1556,7 +1676,7 @@ def pagina(R, N, hist, corr, salida):
             proba["carreras"][c] = "GP de " + GP.get(t["gp"].iloc[0], t["gp"].iloc[0]) + " " + c[:4]
         proba["momentos"][k] = {
             "tipo": P["tipo"], "cols": P["columnas"], "rangos": rangos, "carreras": carreras,
-            "etq": {c: ("Lugar de largada" if (m == 0 and c == "posicion_al_corte") else ENTRADA[c][0]) for c in P["columnas"]},
+            "etq": {c: ("Lugar en la grilla de largada" if (m == 0 and c == "posicion_al_corte") else ENTRADA[c][0]) for c in P["columnas"]},
             "log": [c for c in P["columnas"] if ENTRADA[c][2] == "log"],
             "max_pos": int(round(P["rangos"]["posicion_al_corte"][1])),
             "lineal": P["terminos"] if P["tipo"] == "lineal" else None,
@@ -1570,6 +1690,7 @@ def pagina(R, N, hist, corr, salida):
             .replace("__T_MODELO__", z["t_modelo"]).replace("__L_MODELO__", z["l_modelo"]).replace("__L_TABLA__", z["l_tabla"])
             .replace("__C_MODELO__", como_modelo(R, mod, regla))
             .replace("__N_EXPLORA__", n(len(e))).replace("__CARRERAS_EXPLORA__", str(e["c"].nunique()))
+            .replace("__C_EXPLORA__", como_explora(R, N, e)).replace("__C_PROBA__", como_proba(R))
             .replace("__FECHA__", time.strftime("%d/%m/%Y"))
             .replace("__SPECS__", specs_json).replace("__PROBA__", json.dumps(proba, ensure_ascii=False)))
     Path(salida).parent.mkdir(parents=True, exist_ok=True)
