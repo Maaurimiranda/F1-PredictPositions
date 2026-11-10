@@ -596,10 +596,11 @@ TABLA_CAMPOS = ["spearman_m", "spearman_r", "podio_m", "podio_r", "top10_m", "to
 def g_dos_tablas(sel, col_pred, tuyo, tip, izq, der, real="real", alto=21):
     """Dos columnas de puestos unidas por una línea por piloto: la tabla que arma una predicción y la de llegada."""
     t = (sel.transform_window(pp="row_number()", sort=[alt.SortField(col_pred), alt.SortField("pos")])
-            .transform_calculate(dif=f"abs(datum.pp - datum.{real})", tuyo=tuyo,
+            .transform_calculate(dif=f"abs(datum.pp - datum.{real})", error=f"abs(datum.{col_pred} - datum.{real})", tuyo=tuyo,
                                  grupo=("datum.fin == 'abandonó' ? 'abandonó' : datum.dif <= 1 ? 'acertó (o le erró por 1)' : "
                                         "datum.dif <= 4 ? 'le erró por 2 a 4' : 'le erró por 5 o más'"),
                                  izq="'P' + datum.pp + '  ' + datum.piloto", der=f"datum.piloto + '  P' + datum.{real}"))
+    tip = tip[:5] + [alt.Tooltip("pp:Q", title="Puesto en la tabla que armó el modelo")] + tip[5:]
     Y = dict(scale=alt.Scale(domain=[0.5, 22.5], reverse=True, nice=False, zero=False), axis=None, title=None)
     X = alt.Scale(domain=[-0.42, 1.42], nice=False, zero=False)
     grupos = ["acertó (o le erró por 1)", "le erró por 2 a 4", "le erró por 5 o más", "abandonó"]
