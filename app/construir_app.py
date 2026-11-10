@@ -965,7 +965,7 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
 </section>
 </main>
 <footer>
-  Grupo 8 · 5K09 · Luconi Martina, Olea Facundo, Miranda Mauricio, Mezzabota Tomás, De Coninck Ramiro, XXXX Victoria.<br>
+  Grupo 8 · 5K09 · Luconi Martina, Olea Facundo, Miranda Mauricio, Mezzabota Tomás, De Coninck Ramiro, Acosta Victoria.<br>
   Datos: corrida del pipeline del 23/09/2026 (Jolpica-F1, FastF1, OpenF1). Página generada con <code>app/construir_app.py</code>
   el __FECHA__ · <a href="https://github.com/Maaurimiranda/f1-predictpositions">repositorio</a>.
 </footer>
