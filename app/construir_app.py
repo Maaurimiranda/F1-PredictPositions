@@ -722,7 +722,9 @@ def g_proba_aportes():
         opacity=alt.condition("datum.v < 0", alt.value(1), alt.value(0.45)),
         tooltip=[alt.Tooltip("etq:N", title="Entrada"), alt.Tooltip("v:Q", title="Aporte (puestos)", format="+.2f")])
     cero = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#8a877f").encode(x="x:Q")
-    return (cero + barras).properties(width=420, height=alt.Step(26),
+    valores = a.mark_text(fontSize=11.5, fontWeight=600, color=TINTA, align="left").encode(
+        y=Y, x=alt.value(432), text=alt.Text("v:Q", format="+.2f"))
+    return (cero + barras + valores).properties(width=420, height=alt.Step(26),
                                       title="Cómo arma el modelo el número del piloto elegido")
 
 
@@ -819,6 +821,8 @@ button.volver:hover{background:var(--tinta);color:#fff}
 .aviso{background:#fff6e0;border:1px solid #f0d48a;color:#6b4e00;border-radius:10px;padding:10px 14px;font-size:14px;margin:8px 0}
 .queToca{font-size:14px;color:var(--suave);max-width:80ch}
 .controles.chico{padding:10px 16px}
+.cuenta{font-size:15px;margin:4px 0 8px}.cuenta b{color:var(--azul)}
+.camino{margin:6px 0 10px;padding-left:22px;font-size:14.5px}.camino li{margin:3px 0}.camino .si{color:var(--azul);font-weight:700}.camino .no{color:#b35a16;font-weight:700}
 .titular{font-size:17px;font-weight:700;color:var(--azul);margin:10px 0 4px;min-height:1.5em}
 .proba{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:16px;align-items:start}
 @media (max-width:900px){.proba{grid-template-columns:1fr}}
@@ -953,7 +957,8 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   </div>
   <p class="aviso" id="p-aviso" hidden></p>
   <details class="como"><summary>Ver más <small>por qué el modelo pone al piloto elegido en ese puesto</small></summary>
-    <div class="cuerpo"><div class="grafico" id="g-proba-apo"></div><p class="nota" id="p-apo-nota"></p></div></details>
+    <div class="cuerpo"><p class="cuenta" id="p-apo-cuenta"></p><div class="grafico" id="g-proba-apo-caja"><div id="g-proba-apo"></div></div>
+    <ol class="camino" id="p-camino" hidden></ol><p class="nota" id="p-apo-nota"></p></div></details>
 </section>
 </main>
 <footer>
@@ -999,10 +1004,18 @@ function predecir(k, orden, vals) {
     if (M.lineal) {
       cambio = M.lineal.intercepto;
       partes.push(["punto de partida (constante)", M.lineal.intercepto]);
-      for (const [c, w, mu, sd] of M.lineal.partes) { const a = w * (x[c] - mu) / sd; cambio += a; partes.push([M.etq[c], a]); }
+      for (const [c, w, mu, sd] of M.lineal.partes) {
+        const a = w * (x[c] - mu) / sd; cambio += a;
+        const v = pantalla(k, c, x[c]), d = M.rangos[c][2] < 1 ? 1 : 0;
+        partes.push([`${M.etq[c].replace(/ \(3 o más.*\)/, "")}: ${num(v, d)}`, a]);
+      }
     } else {
       let n = M.arbol;
-      while (n.v === undefined) n = x[n.c] <= n.u ? n.l : n.r;
+      while (n.v === undefined) {
+        const si = x[n.c] <= n.u;
+        partes.push([n.c, n.u, si, x[n.c]]);
+        n = si ? n.l : n.r;
+      }
       cambio = n.v;
     }
     return {p, pos: i + 1, esp: i + 1 + cambio, partes};
@@ -1094,13 +1107,7 @@ function actualizar() {
       ? `${r.p}: va P${r.pos} → el modelo lo pone P${r.final} (posición esperada ${num(r.esp)})`
       : `${r.p}: larga P${r.pos} → el modelo espera que llegue en el puesto ${num(r.esp)}`;
   } else t.textContent = "Hacé clic en un piloto para ver y cambiar sus datos.";
-  const a = vistas["g-proba-apo"];
-  if (a) a.change("aportes", vega.changeset().remove(() => true).insert(
-    est.abierto && M.lineal ? por[est.abierto].partes.map(([etq, val]) => ({etq, v: Math.round(val * 1000) / 1000})) : [])).runAsync();
-  document.getElementById("p-apo-nota").textContent = !M.lineal
-    ? "Antes de largar el modelo de esta página es un árbol: no suma aportes, hace preguntas encadenadas (¿larga antes o después de tal puesto? ¿cuántos puntos tiene?) y cada camino termina en cuántos puestos gana o pierde."
-    : est.abierto ? "Posición esperada = dónde va + la suma de las barras. Cada barra: coeficiente × (valor − media) / desvío, comparado con un piloto promedio de 2022–2025."
-    : "Elegí un piloto de la lista para ver cómo arma el modelo su número.";
+  verMas(M, por);
   const aviso = document.getElementById("p-aviso"), n = est.orden.length;
   aviso.hidden = n <= M.max_pos;
   aviso.textContent = `⚠ El modelo entrenó con carreras de ${M.max_pos} autos: los puestos ${M.max_pos + 1} a ${n} nunca los vio, así que para esos pilotos la fórmula extrapola.`;
@@ -1118,6 +1125,35 @@ function reordenar(nuevo) {
   const antes = est.orden;
   if (tiene("tendencia_10")) nuevo.forEach((q, i) => { est.vals[q].tendencia_10 += antes.indexOf(q) - i; });
   est.orden = nuevo;
+}
+
+// «Ver más»: cómo llega el modelo al número del piloto elegido
+function verMas(M, por) {
+  const r = est.abierto ? por[est.abierto] : null, a = vistas["g-proba-apo"];
+  const cuenta = document.getElementById("p-apo-cuenta"), caja = document.getElementById("g-proba-apo-caja");
+  const camino = document.getElementById("p-camino"), notaV = document.getElementById("p-apo-nota");
+  const filas = r && M.lineal ? r.partes.map(([etq, v]) => ({etq, v: Math.round(v * 1000) / 1000})) : [];
+  if (a) a.change("aportes", vega.changeset().remove(() => true).insert(filas)).runAsync();
+  caja.hidden = !(r && M.lineal); camino.hidden = !(r && !M.lineal);
+  if (!r) { cuenta.innerHTML = ""; notaV.textContent = "Hacé clic en un piloto de la lista para ver cómo arma el modelo su predicción."; return; }
+  const suma = r.esp - r.pos, signo = suma >= 0 ? "+" : "−";
+  const final = M.lineal ? ` → en la tabla del modelo queda <b>P${r.final}</b>` : "";
+  cuenta.innerHTML = `<strong>${r.p}</strong>: ${est.k === "0" ? "larga" : "va"} P${r.pos} ${signo} ${num(Math.abs(suma), 2)} puestos = ` +
+    `posición esperada <b>${num(r.esp, 2)}</b>${final}.`;
+  if (M.lineal) {
+    notaV.textContent = "Cada barra es lo que aporta un dato, comparado con un piloto promedio de 2022–2025 " +
+      "(coeficiente × (valor − media) / desvío). Las que van a la izquierda lo adelantan; las de la derecha lo atrasan. " +
+      "La suma de todas es lo que se le suma a dónde va. Después, el modelo ordena a todos por su posición esperada.";
+  } else {
+    const txt = ([c, u, si, v]) => {
+      const nombre = M.etq[c], d = M.rangos[c][2] < 1 ? 1 : 0, umbral = d ? pantalla(est.k, c, u) : Math.floor(pantalla(est.k, c, u));
+      return `¿${nombre}: ${num(umbral, d)} o menos? <span class="${si ? "si" : "no"}">${si ? "Sí" : "No"}</span> (tiene ${num(pantalla(est.k, c, v), d)})`;
+    };
+    camino.innerHTML = r.partes.map(q => `<li>${txt(q)}</li>`).join("") +
+      `<li>Fin del camino: ${suma < 0 ? "gana " + num(-suma, 1) + " puestos" : suma > 0 ? "pierde " + num(suma, 1) + " puestos" : "no gana ni pierde puestos"}.</li>`;
+    notaV.textContent = "Antes de largar el modelo de esta página es un árbol: no suma aportes, hace preguntas encadenadas " +
+      "sobre los datos del piloto. Estas son las que respondió este piloto, en orden; la última hoja dice cuántos puestos gana o pierde.";
+  }
 }
 
 function mover(p, destino) {
