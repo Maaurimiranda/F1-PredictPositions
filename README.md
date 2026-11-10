@@ -79,6 +79,41 @@ Cuidado con dos columnas:
 - **Validación del Silver D** en `silver_builder.validate_snapshot_dataset`, con chequeos nuevos: columnas de los modelos presentes, `current_position` = 1..N en cada carrera y corte, nada posterior al corte y el control al 100 %.
 - **Tests sin Airflow** en `tests/test_snapshots.py` (vueltas sin tiempo, orden de largada, empates, nada posterior al corte, neumáticos): `astro dev pytest`, o `pytest tests/test_snapshots.py` con `pandas` y `pytest` instalados.
 
+## La aplicación (Entrega 4)
+
+La versión final del proyecto es una página web: **https://maaurimiranda.github.io/f1-predictpositions/** (GitHub Pages, carpeta `docs/`).
+Cuenta el proyecto en orden (portada, los datos, lo que encontramos, el modelo) y después deja explorar las predicciones y probar el modelo con un caso propio.
+
+### Cómo se regenera
+
+```bash
+pip install -r app/requirements.txt
+python app/construir_app.py --datos include/output/silver      # carpeta con los dos CSV de la corrida
+```
+
+`app/construir_app.py`:
+
+1. Ejecuta, sin copiarlas, las celdas del notebook `include/Entrega3_Modelado_F1.ipynb` que leen los CSV, rehacen la posición al corte, separan 2022–2025 / 2026 y definen el pipeline (`EstadoEnCarrera`, `Llegada`, `medir`). Si los CSV no están, el notebook los baja de Drive.
+2. Arma los modelos que eligió el notebook (diccionario `DECISIONES`), con la semilla 42, y los vuelve a medir con los mismos 5 cortes. Compara cada número con el del notebook y avisa si alguno cambió.
+3. Calcula las predicciones fuera de muestra (validación 2022–2025 y test 2026) para «Explorá» y escribe la fórmula de cada modelo como expresión de Vega para «Probá el modelo». Comprueba que la fórmula reproduce a scikit-learn en el test.
+4. Dibuja los gráficos con Altair y escribe `docs/index.html`: una sola página, con los datos adentro, que no necesita Python para correr.
+
+Si el pipeline produce datos nuevos, se vuelve a correr el script y se sube `docs/index.html`. Tarda unos 20 segundos.
+
+### Publicación
+
+En GitHub: *Settings → Pages → Build and deployment → Deploy from a branch*, rama `main`, carpeta `/docs`. Cada push que cambie `docs/index.html` actualiza la página en uno o dos minutos.
+
+### Cómo llega el modelo a la página
+
+- **Del 25 % en adelante** el modelo elegido es una regresión lineal: la página tiene escritos sus coeficientes, las medias y los desvíos del escalado, y ordena a los pilotos de la carrera 1, 2, 3… como el notebook.
+- **Antes de largar** el elegido es un boosting (2,911 ± 0,247), que no se puede escribir en la página. «Probá el modelo» usa el árbol ajustado (3,050 ± 0,243): queda a 0,139 puestos, menos de un desvío del boosting, y se escribe como preguntas encadenadas. En «Explorá» y en el tallo, los números son los del boosting.
+- Los deslizadores van del mínimo al máximo que vio el modelo en 2022–2025. Si el valor real de un piloto de 2026 queda afuera (por ejemplo, los puestos 21 y 22, que no existían con 20 autos), la página lo lleva al borde y avisa.
+
+### Qué cambió desde la Entrega 3
+
+_(Completar con lo que marcó el docente y cómo se resolvió.)_
+
 ## Estructura del repositorio
 
 ```
@@ -97,6 +132,12 @@ Cuidado con dos columnas:
 │       ├── bronze/               # Datos crudos particionados por fuente/año/ronda
 │       └── silver/               # Datasets CSV fechados
 ├── include/frozen/               # Respaldo frío del último Silver exitoso
+├── include/Entrega3_Modelado_F1.ipynb  # Modelado (Entrega 3): de acá salen los modelos de la aplicación
+├── app/
+│   ├── construir_app.py          # Genera docs/index.html desde los CSV del pipeline y el notebook
+│   └── requirements.txt          # Versiones con las que coincide con el notebook
+├── docs/
+│   └── index.html                # La aplicación publicada en GitHub Pages
 ├── tests/
 │   ├── dags/test_dag_integrity.py  # El DAG importa sin errores
 │   └── test_snapshots.py           # Lógica del Silver D (sin Airflow)
