@@ -466,7 +466,7 @@ def g_modelo(R):
                 axis=alt.Axis(labelAngle=0, labelPadding=6))
     XO = alt.XOffset("quien:N", sort=quienes, scale=alt.Scale(paddingOuter=0.6))
     color = alt.Color("quien:N", scale=alt.Scale(domain=quienes, range=[NARANJA, AZUL]),
-                      legend=alt.Legend(title=None, orient="bottom", direction="horizontal", labelLimit=400))
+                      legend=alt.Legend(title=None, orient="bottom", direction="vertical", labelLimit=400, rowPadding=6))
     tip = [alt.Tooltip("quien:N", title="Quién predice"), alt.Tooltip("momento:N", title="Momento"),
            alt.Tooltip("muestra:N", title="Carreras"), alt.Tooltip("mae:Q", title="Se equivoca en promedio (puestos)", format=".2f")]
     base = alt.Chart(df).encode(x=X_M, xOffset=XO, color=color)
@@ -945,7 +945,8 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <h2>Armá tu carrera: ordená a los pilotos y mirá dónde los hace terminar el modelo</h2>
   <p class="lectura">Elegí una carrera de 2026 y un momento (25 % quiere decir que ya se corrió un cuarto de la carrera). A la izquierda está el orden de la carrera en ese momento:
   <strong>arrastrá a los pilotos</strong> (o usá las flechas) para cambiarlo, y <strong>hacé clic en un piloto</strong> para
-  cambiar sus datos, como cuántas vueltas tienen sus neumáticos o cuántos puntos tiene en el campeonato. A la derecha, el
+  cambiar sus datos. Los datos que se pueden cambiar dependen del momento, porque en cada uno el modelo usa los que le
+  sirven: por ejemplo, al 25 % cuentan los puntos de su equipo, y al 50 % y al 75 %, qué tan gastados tiene los neumáticos. A la derecha, el
   modelo te muestra en qué puesto terminaría cada uno. Si probás algo que nunca pasó en las carreras de las que aprendió el
   modelo, la página te avisa.</p>
   <div class="controles">
