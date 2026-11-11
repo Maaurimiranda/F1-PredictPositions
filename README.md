@@ -1,6 +1,8 @@
 # F1-PredictPositions
 
-Pipeline de datos de Fórmula 1 para predecir la **posición de llegada** de cada piloto en cuatro momentos de la carrera: antes de largar y al 25, 50 y 75 %.
+Proyecto integrador de Ciencia de Datos (UTN FRM, 2026, Grupo 8 · 5K09): predecir la **posición de llegada** de cada piloto de Fórmula 1 en cuatro momentos de la carrera, antes de largar y al 25, 50 y 75 %.
+
+El repositorio tiene la cadena completa: el **pipeline** que baja y limpia los datos (Airflow, `dags/` e `include/f1/`), el **análisis** de la Entrega 2 y el **modelo** de la Entrega 3 (notebooks en `include/`), y la **aplicación** de la Entrega 4 (`app/` genera `docs/index.html`, publicada en GitHub Pages: https://maaurimiranda.github.io/f1-predictpositions/). Cómo se corre cada parte: [«Cómo se corre todo, de punta a punta»](#cómo-se-corre-todo-de-punta-a-punta).
 
 ## Pregunta de investigación
 
@@ -86,12 +88,12 @@ El proyecto es una sola cadena: el pipeline produce los datos, los notebooks los
 | Paso | Qué se corre | Qué produce |
 |---|---|---|
 | 1. Pipeline | `astro dev start` y, en Airflow, el DAG `f1_ingest` (ver «Instalación paso a paso») | `include/output/silver/driver_race_snapshots_<fecha>.csv` y `driver_lap_features_<fecha>.csv` |
-| 2. Análisis (Entrega 2) | `include/EDA_Hipotesis_F1_v2.ipynb` (Colab o Jupyter) | Las hipótesis H1–H4 y sus gráficos |
-| 3. Modelo (Entrega 3) | `include/Entrega3_Modelado_F1.ipynb` (Colab o Jupyter), con los CSV del paso 1 | La validación, la elección del modelo de cada momento y el test 2026 |
+| 2. Análisis (Entrega 2) | `include/EDA_Hipotesis_F1_v2.ipynb` (Colab o Jupyter), «Ejecutar todo» | El análisis exploratorio y las hipótesis H1–H4 con sus gráficos |
+| 3. Modelo (Entrega 3) | `include/Entrega3_Modelado_F1.ipynb` (Colab o Jupyter), «Ejecutar todo» | La validación, la elección del modelo de cada momento, el test 2026, la tabla completa por carrera y la prueba de `equipo_top` |
 | 4. Aplicación (Entrega 4) | `pip install -r app/requirements.txt` y `python app/construir_app.py --datos include/output/silver` | `docs/index.html`, con los mismos números que el notebook |
 | 5. Publicación | Subir `docs/index.html` a `main` | La página en GitHub Pages |
 
-Los notebooks bajan de Drive la corrida del 23/09/2026 si no encuentran los CSV, así que se pueden correr sin el pipeline. El script de la aplicación usa la corrida más nueva que haya en la carpeta que se le pasa; si no es la del 23/09, avisa que los números van a cambiar respecto del notebook.
+**Los notebooks se pueden correr sin el pipeline:** si no encuentran los CSV al lado, los bajan de Drive con `gdown` (el análisis, la corrida del 22/09/2026; el modelo, la del 23/09/2026, que es la que usa la aplicación). Para usar una corrida propia, basta con copiar los CSV del paso 1 a la carpeta del notebook con esos nombres. Necesitan `pandas`, `numpy`, `matplotlib`, `scikit-learn`, `altair` y `gdown` (en Colab ya vienen instalados); para obtener exactamente los números de la entrega, el modelo usa las versiones de `app/requirements.txt`. El script de la aplicación usa la corrida más nueva que haya en la carpeta que se le pasa; si no es la del 23/09, avisa que los números van a cambiar respecto del notebook.
 
 ## La aplicación (Entrega 4)
 
