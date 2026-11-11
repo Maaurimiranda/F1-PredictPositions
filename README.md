@@ -79,6 +79,20 @@ Cuidado con dos columnas:
 - **Validación del Silver D** en `silver_builder.validate_snapshot_dataset`, con chequeos nuevos: columnas de los modelos presentes, `current_position` = 1..N en cada carrera y corte, nada posterior al corte y el control al 100 %.
 - **Tests sin Airflow** en `tests/test_snapshots.py` (vueltas sin tiempo, orden de largada, empates, nada posterior al corte, neumáticos): `astro dev pytest`, o `pytest tests/test_snapshots.py` con `pandas` y `pytest` instalados.
 
+## Cómo se corre todo, de punta a punta
+
+El proyecto es una sola cadena: el pipeline produce los datos, los notebooks los analizan y eligen el modelo, y el script de la aplicación toma esos mismos datos y ese mismo código para generar la página.
+
+| Paso | Qué se corre | Qué produce |
+|---|---|---|
+| 1. Pipeline | `astro dev start` y, en Airflow, el DAG `f1_ingest` (ver «Instalación paso a paso») | `include/output/silver/driver_race_snapshots_<fecha>.csv` y `driver_lap_features_<fecha>.csv` |
+| 2. Análisis (Entrega 2) | `include/EDA_Hipotesis_F1_v2.ipynb` (Colab o Jupyter) | Las hipótesis H1–H4 y sus gráficos |
+| 3. Modelo (Entrega 3) | `include/Entrega3_Modelado_F1.ipynb` (Colab o Jupyter), con los CSV del paso 1 | La validación, la elección del modelo de cada momento y el test 2026 |
+| 4. Aplicación (Entrega 4) | `pip install -r app/requirements.txt` y `python app/construir_app.py --datos include/output/silver` | `docs/index.html`, con los mismos números que el notebook |
+| 5. Publicación | Subir `docs/index.html` a `main` | La página en GitHub Pages |
+
+Los notebooks bajan de Drive la corrida del 23/09/2026 si no encuentran los CSV, así que se pueden correr sin el pipeline. El script de la aplicación usa la corrida más nueva que haya en la carpeta que se le pasa; si no es la del 23/09, avisa que los números van a cambiar respecto del notebook.
+
 ## La aplicación (Entrega 4)
 
 La versión final del proyecto es una página web: **https://maaurimiranda.github.io/f1-predictpositions/** (GitHub Pages, carpeta `docs/`).
@@ -98,11 +112,11 @@ python app/construir_app.py --datos include/output/silver      # carpeta con los
 3. Calcula las predicciones fuera de muestra (validación 2022–2025 y test 2026) para «Explorá» y escribe la fórmula de cada modelo como expresión de Vega para «Probá el modelo». Comprueba que la fórmula reproduce a scikit-learn en el test.
 4. Dibuja los gráficos con Altair y escribe `docs/index.html`: una sola página, con los datos adentro, que no necesita Python para correr.
 
-Si el pipeline produce datos nuevos, se vuelve a correr el script y se sube `docs/index.html`. Tarda unos 20 segundos.
+Si el pipeline produce datos nuevos, se vuelve a correr el script y se sube `docs/index.html`. Tarda unos 30 segundos.
 
 ### Publicación
 
-En GitHub: *Settings → Pages → Build and deployment → Deploy from a branch*, rama `main`, carpeta `/docs`. Cada push que cambie `docs/index.html` actualiza la página en uno o dos minutos.
+En GitHub (lo hace quien administra el repositorio): *Settings → Pages → Build and deployment → Deploy from a branch*, rama `main`, carpeta `/docs`. Cada push que cambie `docs/index.html` actualiza la página en uno o dos minutos.
 
 ### Cómo llega el modelo a la página
 
@@ -133,6 +147,7 @@ En GitHub: *Settings → Pages → Build and deployment → Deploy from a branch
 │       ├── bronze/               # Datos crudos particionados por fuente/año/ronda
 │       └── silver/               # Datasets CSV fechados
 ├── include/frozen/               # Respaldo frío del último Silver exitoso
+├── include/EDA_Hipotesis_F1_v2.ipynb   # Análisis e hipótesis (Entrega 2)
 ├── include/Entrega3_Modelado_F1.ipynb  # Modelado (Entrega 3): de acá salen los modelos de la aplicación
 ├── app/
 │   ├── construir_app.py          # Genera docs/index.html desde los CSV del pipeline y el notebook
