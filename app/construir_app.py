@@ -501,8 +501,9 @@ def g_explora(e, pc, inicial):
     medida = alt.param(name="medida_e", value="Cuántos puestos se equivoca",
                        bind=alt.binding_radio(options=["Cuántos puestos se equivoca", "Qué tan parecida queda la tabla"], name=" ",
                                               element="#c-medida"))
-    carrera = alt.selection_point(name="carrera_e", fields=["c"], value=[{"c": inicial["c"]}], on="click",
-                                  clear=False, toggle=False)
+    # sólo cuenta el clic sobre una carrera: un clic (o mantener apretado) en el vacío no borra la elección
+    carrera = alt.selection_point(name="carrera_e", fields=["c"], value=[{"c": inicial["c"]}],
+                                  on="click[event.item && event.item.datum && event.item.datum.c]", clear=False, toggle=False, empty=False)
     filtro = ("datum.m == momento_e && (temporada_e == 'Todas' || datum.temp == temporada_e) && "
               "(piloto_e == 'Todos' || datum.piloto == piloto_e)")
     errores = dict(em="abs(datum.pred - datum.real)", er="abs(datum.pos - datum.real)")
@@ -825,7 +826,7 @@ button.volver:hover{background:var(--tinta);color:#fff}
 .aviso{background:#fff6e0;border:1px solid #f0d48a;color:#6b4e00;border-radius:10px;padding:10px 14px;font-size:14px;margin:8px 0}
 .queToca{font-size:14px;color:var(--suave);max-width:80ch}
 .controles.chico{padding:10px 16px}
-.eje-e{font-size:13.5px;color:var(--suave);margin:10px 0 4px;display:flex;flex-wrap:wrap;gap:4px 16px}.eje-e strong{color:var(--tinta);font-weight:600}
+.eje-e{font-size:13.5px;color:var(--suave);margin:10px 0 4px;display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center}.eje-e .volver{margin-left:auto;padding:5px 11px;font-size:13px}.eje-e strong{color:var(--tinta);font-weight:600}
 .cuenta{font-size:15px;margin:4px 0 8px}.cuenta b{color:var(--azul)}
 .camino{margin:6px 0 10px;padding-left:22px;font-size:14.5px}.camino li{margin:3px 0}.camino .si{color:var(--azul);font-weight:700}.camino .no{color:#b35a16;font-weight:700}
 .titular{font-size:17px;font-weight:700;color:var(--azul);margin:10px 0 4px;min-height:1.5em}
@@ -916,7 +917,8 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
     <div class="control"><span class="titulo">Medir cada carrera por</span><div id="c-medida"></div></div>
   </div>
   <p class="eje-e"><strong id="e-eje">Eje vertical: puestos que se equivoca, en promedio (más abajo es mejor).</strong>
-  <span>Rueda del mouse o pellizco: acercar y alejar · arrastrar: moverse · doble clic: volver a ver todo.</span></p>
+  <span>Rueda del mouse o pellizco: acercar y alejar · arrastrar: moverse · doble clic: volver a ver todo.</span>
+  <button type="button" class="volver" id="e-restablecer">Restablecer la vista</button></p>
   <div class="grafico" id="g-explora"></div>
   <div class="controles chico">
     <div class="control"><span class="titulo">Ver la carrera elegida</span><div class="pastillas" id="e-vista">
@@ -983,16 +985,30 @@ const listo = Promise.all(Object.entries(SPECS).map(([id, spec]) =>
   vegaEmbed("#" + id, spec, OPC).then(r => { vistas[id] = r.view; })));
 
 // Explorá: el panorama le pasa momento, piloto y carrera elegida a las dos vistas del detalle
-listo.then(() => {
+const EJE = x => { document.getElementById("e-eje").textContent = x === "Cuántos puestos se equivoca"
+  ? "Eje vertical: puestos que se equivoca, en promedio (más abajo es mejor)."
+  : "Eje vertical: qué tan parecida es la tabla predicha a la final (1 = idénticas; más arriba es mejor)."; };
+function conectarExplora() {
   const pv = vistas["g-explora"], subs = [vistas["g-explora-tablas"], vistas["g-explora-det"]];
-  for (const nm of ["momento_e", "piloto_e"]) pv.addSignalListener(nm, (_, x) => subs.forEach(v => v.signal(nm, x).runAsync()));
-  const eje = x => { document.getElementById("e-eje").textContent = x === "Cuántos puestos se equivoca"
-    ? "Eje vertical: puestos que se equivoca, en promedio (más abajo es mejor)."
-    : "Eje vertical: qué tan parecida es la tabla predicha a la final (1 = idénticas; más arriba es mejor)."; };
-  pv.addSignalListener("medida_e", (_, x) => eje(x));
-  pv.addDataListener("carrera_e_store", (_, v) => {
-    if (v && v.length) subs.forEach(s => s.signal("carrera_c", v[0].values[0]).runAsync());
-  });
+  for (const nm of ["momento_e", "piloto_e"]) {
+    pv.addSignalListener(nm, (_, x) => subs.forEach(v => v.signal(nm, x).runAsync()));
+    subs.forEach(v => v.signal(nm, pv.signal(nm)));
+  }
+  pv.addSignalListener("medida_e", (_, x) => EJE(x));
+  EJE(pv.signal("medida_e"));
+  const pasar = v => { if (v && v.length) subs.forEach(s => s.signal("carrera_c", v[0].values[0]).runAsync()); };
+  pv.addDataListener("carrera_e_store", (_, v) => pasar(v));
+  pasar(pv.data("carrera_e_store"));
+  subs.forEach(v => v.runAsync());
+}
+listo.then(conectarExplora);
+// «Restablecer la vista»: vuelve a dibujar el panorama como al abrir la página (sin zoom, filtros ni carrera elegida)
+document.getElementById("e-restablecer").addEventListener("click", async () => {
+  vistas["g-explora"].finalize();
+  ["c-momento", "c-temporada", "c-piloto", "c-medida"].forEach(id => { document.getElementById(id).innerHTML = ""; });
+  vistas["g-explora"] = (await vegaEmbed("#g-explora", SPECS["g-explora"], OPC)).view;
+  conectarExplora();
+  document.querySelector('#e-vista button[data-v="tablas"]').click();
 });
 document.querySelectorAll("#e-vista button").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll("#e-vista button").forEach(x => x.classList.toggle("on", x === b));
