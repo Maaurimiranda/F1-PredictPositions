@@ -773,7 +773,7 @@ h4{font-size:15px;margin:22px 0 6px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
 .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:0 0 22px}
 .kpi{background:var(--papel);border:1px solid var(--borde);border-radius:14px;padding:18px 18px 16px;border-top:4px solid var(--azul)}
-.kpi:nth-child(3){border-top-color:var(--naranja)}
+.kpi:nth-child(3){border-top-color:var(--vino)}
 .kpi .num{font-size:34px;font-weight:800;letter-spacing:-.02em;line-height:1.1;font-variant-numeric:tabular-nums}
 .kpi .que{color:var(--suave);font-size:14px;line-height:1.45;margin-top:6px}
 .guia{color:var(--suave);font-size:15px;max-width:70ch}
@@ -871,11 +871,6 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <h1>¿Dónde va a terminar cada piloto de Fórmula 1?</h1>
   <p class="idea">__IDEA__</p>
   <div class="kpis">__KPIS__</div>
-  <p class="guia">Un modelo es un programa que aprende de carreras pasadas para hacer predicciones sobre carreras nuevas.
-  El nuestro predice en qué puesto termina cada piloto en cuatro momentos: antes de la largada y cuando ya se corrió un cuarto,
-  la mitad y tres cuartos de la carrera, usando sólo lo que se sabe hasta ese momento. Abajo contamos qué datos usamos, qué
-  descubrimos y qué tan bien funciona; si querés ver las pruebas, abrí «Cómo lo sabemos» en cada parte. Al final podés
-  recorrer todas las carreras y probar el modelo vos mismo.</p>
 </section>
 
 <section id="datos">
@@ -1334,16 +1329,21 @@ def textos(R, N, corr):
     cuando = {0.0: "antes de la largada", 0.25: "a un cuarto de carrera", 0.5: "a mitad de carrera",
               0.75: "a tres cuartos de carrera"}
     z = {}
-    z["idea"] = (f"El lugar en el que va un piloto dice casi todo sobre dónde va a terminar, y nuestro modelo lo afina con lo que pasa "
-                 f"en la pista: se equivoca en promedio {f(mod[0.0], 1)} puestos antes de la largada y {f(mod[0.75], 1)} "
-                 f"a tres cuartos de carrera, un poco menos que si supusiéramos que nadie cambia de lugar.")
+    ex = R["explora"][R["explora"]["m"] == ETIQUETA[0.0]]
+    err_ex, ab_ex = (ex["pred"] - ex["real"]).abs(), ex["fin"] != "terminó"
+    z["idea"] = ("El lugar en el que va un piloto dice casi todo sobre dónde va a terminar, y nuestro modelo lo afina con lo que "
+                 "pasa en la pista prediciendo en qué puesto termina cada piloto en cuatro momentos: antes de la largada y "
+                 "cuando ya se corrió un cuarto, la mitad y tres cuartos de la carrera, usando sólo lo que se sabe hasta ese "
+                 "momento. Abajo contamos qué datos usamos, qué descubrimos y qué tan bien funciona; si querés ver las pruebas, "
+                 "abrí «Cómo lo sabemos» en cada parte. Al final podés recorrer todas las carreras y probar el modelo vos mismo.")
     z["kpis"] = [(f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}",
-                  "puestos que se equivoca el modelo, en promedio: antes de la largada y a tres cuartos de carrera"),
+                  f"antes de la largada se equivoca {f(mod[0.0], 1)} puestos en promedio y cuando llevamos el 75 % de la "
+                  f"carrera, {f(mod[0.75], 1)} puestos"),
                  (f"{top10} de 10",
-                  "pilotos que el modelo pone en la zona de puntos antes de la largada y terminan ahí"),
-                 (f"{f(T[0.0]['modelo'], 1)}",
-                  f"puestos de error, antes de la largada, en las {N['carreras_test']} carreras de 2026: carreras que el "
-                  f"modelo nunca había visto, y aun así se equivoca casi lo mismo")]
+                  "pilotos que el modelo pone en la zona de puntos antes de la largada terminan ahí"),
+                 (f"{f(err_ex[ab_ex].mean(), 1)}",
+                  f"puestos se equivoca, antes de la largada, con un piloto que después abandona (con el resto, "
+                  f"{f(err_ex[~ab_ex].mean(), 1)}): los abandonos no se pueden prever y son la mayor causa de error del modelo")]
     # 1 · Los datos
     z["t_datos"] = ("Más de la mitad de los pilotos termina a dos lugares o menos de donde largó; los que pierden muchos "
                     "lugares son, casi siempre, los que abandonan")

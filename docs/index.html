@@ -38,7 +38,7 @@ h4{font-size:15px;margin:22px 0 6px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
 .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:0 0 22px}
 .kpi{background:var(--papel);border:1px solid var(--borde);border-radius:14px;padding:18px 18px 16px;border-top:4px solid var(--azul)}
-.kpi:nth-child(3){border-top-color:var(--naranja)}
+.kpi:nth-child(3){border-top-color:var(--vino)}
 .kpi .num{font-size:34px;font-weight:800;letter-spacing:-.02em;line-height:1.1;font-variant-numeric:tabular-nums}
 .kpi .que{color:var(--suave);font-size:14px;line-height:1.45;margin-top:6px}
 .guia{color:var(--suave);font-size:15px;max-width:70ch}
@@ -134,13 +134,8 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
 <section id="portada">
   <span class="parte">Proyecto integrador · Ciencia de Datos · UTN FRM 2026 · Grupo 8 (5K09)</span>
   <h1>¿Dónde va a terminar cada piloto de Fórmula 1?</h1>
-  <p class="idea">El lugar en el que va un piloto dice casi todo sobre dónde va a terminar, y nuestro modelo lo afina con lo que pasa en la pista: se equivoca en promedio 2,9 puestos antes de la largada y 1,3 a tres cuartos de carrera, un poco menos que si supusiéramos que nadie cambia de lugar.</p>
-  <div class="kpis"><div class="kpi"><div class="num">2,9 → 1,3</div><div class="que">puestos que se equivoca el modelo, en promedio: antes de la largada y a tres cuartos de carrera</div></div><div class="kpi"><div class="num">8 de 10</div><div class="que">pilotos que el modelo pone en la zona de puntos antes de la largada y terminan ahí</div></div><div class="kpi"><div class="num">3,0</div><div class="que">puestos de error, antes de la largada, en las 14 carreras de 2026: carreras que el modelo nunca había visto, y aun así se equivoca casi lo mismo</div></div></div>
-  <p class="guia">Un modelo es un programa que aprende de carreras pasadas para hacer predicciones sobre carreras nuevas.
-  El nuestro predice en qué puesto termina cada piloto en cuatro momentos: antes de la largada y cuando ya se corrió un cuarto,
-  la mitad y tres cuartos de la carrera, usando sólo lo que se sabe hasta ese momento. Abajo contamos qué datos usamos, qué
-  descubrimos y qué tan bien funciona; si querés ver las pruebas, abrí «Cómo lo sabemos» en cada parte. Al final podés
-  recorrer todas las carreras y probar el modelo vos mismo.</p>
+  <p class="idea">El lugar en el que va un piloto dice casi todo sobre dónde va a terminar, y nuestro modelo lo afina con lo que pasa en la pista prediciendo en qué puesto termina cada piloto en cuatro momentos: antes de la largada y cuando ya se corrió un cuarto, la mitad y tres cuartos de la carrera, usando sólo lo que se sabe hasta ese momento. Abajo contamos qué datos usamos, qué descubrimos y qué tan bien funciona; si querés ver las pruebas, abrí «Cómo lo sabemos» en cada parte. Al final podés recorrer todas las carreras y probar el modelo vos mismo.</p>
+  <div class="kpis"><div class="kpi"><div class="num">2,9 → 1,3</div><div class="que">antes de la largada se equivoca 2,9 puestos en promedio y cuando llevamos el 75 % de la carrera, 1,3 puestos</div></div><div class="kpi"><div class="num">8 de 10</div><div class="que">pilotos que el modelo pone en la zona de puntos antes de la largada terminan ahí</div></div><div class="kpi"><div class="num">7,6</div><div class="que">puestos se equivoca, antes de la largada, con un piloto que después abandona (con el resto, 2,2): los abandonos no se pueden prever y son la mayor causa de error del modelo</div></div></div>
 </section>
 
 <section id="datos">
