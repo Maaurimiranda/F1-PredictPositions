@@ -388,6 +388,7 @@ X_PUESTO = alt.Scale(domain=[0.5, 22.5], nice=False, zero=False)
 
 
 def estilo(ch):
+    ch = ch.properties(autosize=alt.AutoSizeParams(type="pad", resize=True))
     return (ch.configure(background="#ffffff", font=FUENTE, padding={"left": 4, "right": 12, "top": 6, "bottom": 4})
               .configure_view(stroke=None)
               .configure_axis(labelColor="#5f5d57", titleColor="#5f5d57", labelFontSize=12, titleFontSize=12,
@@ -515,9 +516,10 @@ def g_explora(e, pc, inicial):
                                    regla="datum.mae ? datum.mae_r : datum.spearman_r"))
     fin_test = (pd.to_datetime(e["fecha"].max()) + pd.Timedelta(days=12)).strftime("%Y-%m-%d")
     test = pd.DataFrame({"a": ["2026-01-01"], "b": [fin_test], "t": ["2026: carreras nuevas"]})
-    X_F = alt.X("fecha:T", title=None, axis=alt.Axis(format="%Y", tickCount="year", grid=False))
-    banda = alt.Chart(test).mark_rect(color="#f2efe6").encode(x=alt.X("a:T"), x2="b:T")
-    banda_t = alt.Chart(test).mark_text(align="left", baseline="top", dx=6, y=4, color="#7a776f", fontSize=11.5).encode(
+    X_F = alt.X("fecha:T", title=None, axis=alt.Axis(format="%Y", tickCount="year", grid=False), scale=alt.Scale(padding=12))
+    banda = alt.Chart(test).mark_rect(color="#f2efe6", clip=True).encode(x=alt.X("a:T"), x2="b:T")
+    # el rótulo de 2026 va abajo de la franja, donde casi no hay puntos
+    banda_t = alt.Chart(test).mark_text(align="left", baseline="bottom", dx=6, y=276, color="#7a776f", fontSize=11.5).encode(
         x="a:T", text="t:N")
     tip_p = [alt.Tooltip("gp:N", title="Carrera"), alt.Tooltip("fecha:T", title="Fecha", format="%d/%m/%Y"),
              alt.Tooltip("mae_m:Q", title="El modelo se equivoca (puestos)", format=".1f"),
@@ -526,19 +528,18 @@ def g_explora(e, pc, inicial):
              alt.Tooltip("spearman_r:Q", title="Parecido de la tabla de la regla (0 a 1)", format=".2f"),
              alt.Tooltip("podio_m:Q", title="Podio que acertó el modelo", format=".0%"),
              alt.Tooltip("top10_m:Q", title="Zona de puntos que acertó el modelo", format=".0%")]
-    une = pano.mark_rule(color="#d9d6cd").encode(x=X_F, y="regla:Q", y2="modelo:Q")
-    regla = pano.mark_tick(color=NARANJA, thickness=2.5, size=11, opacity=0.9).encode(x=X_F, y="regla:Q", tooltip=tip_p)
-    modelo = pano.mark_circle(color=AZUL, opacity=1, cursor="pointer").encode(
-        x=X_F, y=alt.Y("modelo:Q", scale=alt.Scale(zero=True), title=None),
+    # acercar y alejar: rueda del mouse o pellizco; arrastrar mueve; doble clic vuelve a la vista completa
+    zoom = alt.selection_interval(name="zoom_e", bind="scales", encodings=["x", "y"])
+    une = pano.mark_rule(color="#d9d6cd", clip=True).encode(x=X_F, y="regla:Q", y2="modelo:Q")
+    regla = pano.mark_tick(color=NARANJA, thickness=2.5, size=11, opacity=0.9, clip=True).encode(x=X_F, y="regla:Q", tooltip=tip_p)
+    modelo = pano.mark_circle(color=AZUL, opacity=1, cursor="pointer", clip=True).encode(
+        x=X_F, y=alt.Y("modelo:Q", scale=alt.Scale(zero=False, padding=12), title=None),
         size=alt.condition(carrera, alt.value(190), alt.value(48)),
         stroke=alt.condition(carrera, alt.value(TINTA), alt.value(None)), strokeWidth=alt.value(2),
-        tooltip=tip_p).add_params(carrera)
-    eje = alt.Chart(pd.DataFrame({"a": [1]})).transform_calculate(
-        t="medida_e == 'Cuántos puestos se equivoca' ? 'puestos que se equivoca, en promedio (más abajo es mejor)' : 'parecido entre la tabla predicha y la final: 1 = idénticas (más arriba es mejor)'"
-    ).mark_text(align="left", baseline="top", x=4, y=2, fontSize=11.5, fontWeight=600, color="#5f5d57").encode(text="t:N")
-    panorama = (banda + banda_t + une + regla + modelo + eje).properties(
-        width=760, height=210,
-        title=alt.Title("Todas las carreras",
+        tooltip=tip_p).add_params(carrera, zoom)
+    panorama = (banda + banda_t + une + regla + modelo).properties(
+        width=830, height=280,
+        title=alt.Title("Todas las carreras", offset=22,
                         subtitle=["Cada punto azul es una carrera: cómo le fue al modelo. La raya naranja: cómo le fue a «termina donde está».",
                                   "Hacé clic en una carrera para abrirla abajo."]))
 
@@ -824,6 +825,7 @@ button.volver:hover{background:var(--tinta);color:#fff}
 .aviso{background:#fff6e0;border:1px solid #f0d48a;color:#6b4e00;border-radius:10px;padding:10px 14px;font-size:14px;margin:8px 0}
 .queToca{font-size:14px;color:var(--suave);max-width:80ch}
 .controles.chico{padding:10px 16px}
+.eje-e{font-size:13.5px;color:var(--suave);margin:10px 0 4px;display:flex;flex-wrap:wrap;gap:4px 16px}.eje-e strong{color:var(--tinta);font-weight:600}
 .cuenta{font-size:15px;margin:4px 0 8px}.cuenta b{color:var(--azul)}
 .camino{margin:6px 0 10px;padding-left:22px;font-size:14.5px}.camino li{margin:3px 0}.camino .si{color:var(--azul);font-weight:700}.camino .no{color:#b35a16;font-weight:700}
 .titular{font-size:17px;font-weight:700;color:var(--azul);margin:10px 0 4px;min-height:1.5em}
@@ -913,6 +915,8 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
     <div class="control"><span class="titulo">Seguir a un piloto</span><div id="c-piloto"></div></div>
     <div class="control"><span class="titulo">Medir cada carrera por</span><div id="c-medida"></div></div>
   </div>
+  <p class="eje-e"><strong id="e-eje">Eje vertical: puestos que se equivoca, en promedio (más abajo es mejor).</strong>
+  <span>Rueda del mouse o pellizco: acercar y alejar · arrastrar: moverse · doble clic: volver a ver todo.</span></p>
   <div class="grafico" id="g-explora"></div>
   <div class="controles chico">
     <div class="control"><span class="titulo">Ver la carrera elegida</span><div class="pastillas" id="e-vista">
@@ -982,6 +986,10 @@ const listo = Promise.all(Object.entries(SPECS).map(([id, spec]) =>
 listo.then(() => {
   const pv = vistas["g-explora"], subs = [vistas["g-explora-tablas"], vistas["g-explora-det"]];
   for (const nm of ["momento_e", "piloto_e"]) pv.addSignalListener(nm, (_, x) => subs.forEach(v => v.signal(nm, x).runAsync()));
+  const eje = x => { document.getElementById("e-eje").textContent = x === "Cuántos puestos se equivoca"
+    ? "Eje vertical: puestos que se equivoca, en promedio (más abajo es mejor)."
+    : "Eje vertical: qué tan parecida es la tabla predicha a la final (1 = idénticas; más arriba es mejor)."; };
+  pv.addSignalListener("medida_e", (_, x) => eje(x));
   pv.addDataListener("carrera_e_store", (_, v) => {
     if (v && v.length) subs.forEach(s => s.signal("carrera_c", v[0].values[0]).runAsync());
   });
