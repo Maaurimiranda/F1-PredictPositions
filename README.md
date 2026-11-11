@@ -93,7 +93,7 @@ El proyecto es una sola cadena: el pipeline produce los datos, los notebooks los
 | 4. Aplicación (Entrega 4) | `pip install -r app/requirements.txt` y `python app/construir_app.py --datos include/output/silver` | `docs/index.html`, con los mismos números que el notebook |
 | 5. Publicación | Subir `docs/index.html` a `main` | La página en GitHub Pages |
 
-**Los notebooks se pueden correr sin el pipeline:** si no encuentran los CSV al lado, los bajan de Drive con `gdown` (el análisis, la corrida del 22/09/2026; el modelo, la del 23/09/2026, que es la que usa la aplicación). Para usar una corrida propia, basta con copiar los CSV del paso 1 a la carpeta del notebook con esos nombres. Necesitan `pandas`, `numpy`, `matplotlib`, `scikit-learn`, `altair` y `gdown` (en Colab ya vienen instalados); para obtener exactamente los números de la entrega, el modelo usa las versiones de `app/requirements.txt`. El script de la aplicación usa la corrida más nueva que haya en la carpeta que se le pasa; si no es la del 23/09, avisa que los números van a cambiar respecto del notebook.
+**Los notebooks se pueden correr sin el pipeline:** si no encuentran los CSV al lado, los bajan de Drive con `gdown` (el análisis, la corrida del 22/09/2026; el modelo, la del 23/09/2026, que es la que usa la aplicación). Para usar una corrida propia, basta con copiar los CSV del paso 1 a la carpeta del notebook con esos nombres. Necesitan `pandas`, `numpy`, `matplotlib`, `scikit-learn`, `altair` y `gdown` (en Colab ya vienen instalados); para reproducir exactamente los números publicados, el modelo usa las versiones de `app/requirements.txt`. El script de la aplicación usa la corrida más nueva que haya en la carpeta que se le pasa; si no es la del 23/09, avisa que los números van a cambiar respecto del notebook.
 
 ## La aplicación (Entrega 4)
 
@@ -149,6 +149,7 @@ En GitHub (lo hace quien administra el repositorio): *Settings → Pages → Bui
 │       ├── bronze/               # Datos crudos particionados por fuente/año/ronda
 │       └── silver/               # Datasets CSV fechados
 ├── include/frozen/               # Respaldo frío del último Silver exitoso
+├── include/proyecto_f1_colab.ipynb    # Versión original del pipeline en Colab, con el chequeo de calidad (`chequear_calidad`)
 ├── include/EDA_Hipotesis_F1_v2.ipynb   # Análisis e hipótesis (Entrega 2)
 ├── include/Entrega3_Modelado_F1.ipynb  # Modelado (Entrega 3): de acá salen los modelos de la aplicación
 ├── app/
@@ -257,9 +258,3 @@ Disparar el DAG de nuevo es seguro: **no vuelve a descargar** lo que ya está en
 |---|---|---|
 | `mode` | `full` (default) / `subset` | `subset` procesa solo 2024 para validar rápido |
 | `force` | `false` (default) / `true` | Fuerza re-descarga ignorando la caché en Bronze |
-
-## Notas para la entrega
-
-- **NO** depender de ejecutar una descarga completa en vivo durante la presentación. La corrida debe estar hecha previamente.
-- Cada integrante debe poder explicar qué hace cada tarea del DAG.
-- El notebook `proyecto_f1_colab.ipynb` contiene la lógica original probada y el chequeo de calidad (`chequear_calidad`).
