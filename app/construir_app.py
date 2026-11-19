@@ -771,15 +771,16 @@ h1{font-size:clamp(32px,5vw,50px);line-height:1.08;letter-spacing:-.025em;margin
 h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin:10px 0 12px;max-width:34ch}
 h4{font-size:15px;margin:22px 0 6px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
-.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:8px 0 28px}
-.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 24px 20px;border-top:5px solid var(--azul);display:flex;flex-direction:column}
-.kpi:nth-child(3){border-top-color:var(--vino)}
-.kpi .etq{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--tenue)}
-.kpi .num{font-size:clamp(40px,4.6vw,52px);font-weight:800;letter-spacing:-.025em;line-height:1.05;font-variant-numeric:tabular-nums;margin-top:10px}
-.kpi .tit{font-size:17px;font-weight:700;line-height:1.3;color:var(--tinta);margin-top:6px}
-.kpi .que{color:var(--suave);font-size:15.5px;line-height:1.55;margin:12px 0 18px}
-.kpi .ctx{margin-top:auto;padding-top:12px;border-top:1px dashed var(--borde);font-size:14px;line-height:1.45;color:var(--suave)}
+.kpis{display:grid;grid-template-columns:1fr;gap:16px;margin:8px 0 28px}
+.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 28px;border-left:6px solid var(--azul);display:grid;grid-template-columns:minmax(220px,290px) 1fr;grid-template-areas:"etq que" "num que" "tit ctx";column-gap:36px;align-items:start}
+.kpi:nth-child(3){border-left-color:var(--vino)}
+.kpi .etq{grid-area:etq;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--tenue)}
+.kpi .num{grid-area:num;font-size:clamp(40px,4.6vw,54px);font-weight:800;letter-spacing:-.025em;line-height:1.05;font-variant-numeric:tabular-nums;margin-top:8px}
+.kpi .tit{grid-area:tit;font-size:17px;font-weight:700;line-height:1.3;color:var(--tinta);margin-top:6px}
+.kpi .que{grid-area:que;color:var(--suave);font-size:16px;line-height:1.6;margin:0;align-self:center}
+.kpi .ctx{grid-area:ctx;align-self:end;margin-top:14px;padding-top:12px;border-top:1px dashed var(--borde);font-size:14.5px;line-height:1.45;color:var(--suave)}
 .kpi .ctx b{color:var(--tinta)}
+@media (max-width:760px){.kpi{grid-template-columns:1fr;grid-template-areas:"etq" "num" "tit" "que" "ctx";padding:20px 20px}.kpi .que{margin-top:12px}}
 .guia{color:var(--suave);font-size:15px;max-width:70ch}
 .lectura{max-width:72ch;color:#2b2a26;margin:0 0 16px}
 .grafico{background:var(--papel);border:1px solid var(--borde);border-radius:14px;padding:14px;overflow-x:auto;margin:6px 0 14px}
@@ -1345,7 +1346,7 @@ def textos(R, N, corr):
     z["kpis"] = [
         ("Cuánto se equivoca", f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}", "puestos de error, en promedio",
          f"Si un piloto termina 5.º y el modelo había dicho 3.º, se equivocó por 2 puestos. Antes de la largada el error "
-         f"promedio es de {f(mod[0.0], 1)} puestos; con el 75 % de la carrera corrida baja a {f(mod[0.75], 1)}, porque ya "
+         f"promedio es de {f(mod[0.0], 1)} puestos; con el 75&nbsp;% de la carrera corrida baja a {f(mod[0.75], 1)}, porque ya "
          f"queda poco por pasar.",
          f"Decir que cada piloto termina donde va erra <b>{f(regla[0.0], 1)}</b> y <b>{f(regla[0.75], 1)}</b> puestos."),
         ("Zona de puntos", f"{top10} de 10", "aciertos entre los diez primeros, antes de la largada",
