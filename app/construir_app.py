@@ -487,29 +487,43 @@ def g_modelo(R):
                         subtitle=["Puntos: carreras de 2022 a 2025. Rombos: las 14 carreras de 2026, que el modelo nunca había visto."]))
 
 
-def g_kpi_error(mod, regla):
-    """Portada, tarjeta 1: cuánto se equivoca el modelo (azul) y «termina donde está» (naranja) en cada momento."""
-    quienes = ["«termina donde está»", "nuestro modelo"]
-    df = pd.DataFrame([{"momento": ETIQUETA[m], "quien": q, "mae": round(float(v[m]), 3)}
-                       for m in (0.0, 0.25, 0.5, 0.75) for q, v in zip(quienes, (regla, mod))])
+TRAMOS_ERR = ["exacto", "a 1 puesto", "a 2 o 3", "a 4 o más"]
+AZULES = [AZUL, "#7fa4e3", "#c3d4f1", "#e3e0d7"]   # del acierto exacto (azul del modelo) al error grande (gris)
+
+
+def dist_error(e):
+    """Qué parte de los pilotos queda a cada distancia de lo que predijo el modelo, por momento (validación 2022-2025)."""
+    v = e[e["muestra"] == "validación"].copy()
+    err = (v["pred"] - v["real"]).abs()
+    v["tramo"] = np.select([err < 0.5, err < 1.5, err < 3.5], TRAMOS_ERR[:3], TRAMOS_ERR[3])
+    t = v.groupby(["m", "tramo"]).size().rename("n").reset_index()
+    t["pct"] = t["n"] / t.groupby("m")["n"].transform("sum")
+    return [{"m": r.m, "tramo": r.tramo, "orden": TRAMOS_ERR.index(r.tramo), "pct": round(float(r.pct), 3)}
+            for r in t.itertuples()]
+
+
+def g_kpi_error(dist):
+    """Portada, tarjeta 1: a qué distancia del puesto real queda cada predicción, en cada momento."""
+    df = pd.DataFrame(dist)
     base = alt.Chart(df).encode(
-        x=alt.X("momento:N", sort=MOMS, title=None,
-                axis=alt.Axis(labelAngle=0, domain=False, ticks=False, labelPadding=6, labelFontSize=11,
+        y=alt.Y("m:N", sort=MOMS, title="Momento de la carrera",
+                axis=alt.Axis(domain=False, ticks=False, labelFontSize=11, labelPadding=6, titleFontSize=11,
                               labelExpr="datum.label == 'Antes de largar' ? 'largada' : datum.label")),
-        y=alt.Y("mae:Q", scale=alt.Scale(domain=[0, 4]), title=None,
-                axis=alt.Axis(labels=False, ticks=False, domain=False, tickCount=4)),
-        color=alt.Color("quien:N", scale=alt.Scale(domain=quienes, range=[NARANJA, AZUL]),
-                        legend=alt.Legend(title=None, orient="top", direction="horizontal", labelFontSize=11,
-                                          symbolSize=60, columnPadding=12)))
-    tip = [alt.Tooltip("quien:N", title="Quién predice"), alt.Tooltip("momento:N", title="Momento"),
-           alt.Tooltip("mae:Q", title="Se equivoca en promedio (puestos)", format=".2f")]
-    linea = base.mark_line(strokeWidth=2.5)
-    punto = base.mark_circle(size=55, opacity=1).encode(tooltip=tip)
-    abajo = base.transform_filter("datum.quien == 'nuestro modelo'").mark_text(
-        dy=9, baseline="top", fontSize=11, fontWeight=600).encode(text=alt.Text("mae:Q", format=".1f"))
-    arriba = base.transform_filter("datum.quien != 'nuestro modelo'").mark_text(
-        dy=-9, baseline="bottom", fontSize=11, fontWeight=600).encode(text=alt.Text("mae:Q", format=".1f"))
-    return (linea + punto + abajo + arriba).properties(width=270, height=130)
+        x=alt.X("pct:Q", stack="normalize", title="Parte de los pilotos",
+                axis=alt.Axis(format="%", values=[0, 0.5, 1], grid=False, domain=False, ticks=False,
+                              labelFontSize=11, titleFontSize=11)),
+        order=alt.Order("orden:Q"))
+    barras = base.mark_bar(height=18).encode(
+        color=alt.Color("tramo:N", scale=alt.Scale(domain=TRAMOS_ERR, range=AZULES), sort=TRAMOS_ERR,
+                        legend=alt.Legend(title="Lejos del puesto real:", orient="top", direction="horizontal",
+                                          labelFontSize=11, titleFontSize=11, symbolType="square", symbolSize=90,
+                                          columnPadding=8, titleOrient="top")),
+        tooltip=[alt.Tooltip("m:N", title="Momento"), alt.Tooltip("tramo:N", title="Se equivocó"),
+                 alt.Tooltip("pct:Q", title="Parte de los pilotos", format=".0%")])
+    exacto = base.transform_filter("datum.tramo == 'exacto'").mark_text(
+        align="left", x=5, color="#ffffff", fontSize=11, fontWeight=700).encode(
+        x=alt.value(5), text=alt.Text("pct:Q", format=".0%"))
+    return (barras + exacto).properties(width=280, height=120)
 
 
 def g_kpi_puntos(aciertos):
@@ -517,12 +531,13 @@ def g_kpi_puntos(aciertos):
     df = pd.DataFrame({"i": range(1, 11), "res": ["terminó entre los 10 primeros" if i <= aciertos else "terminó más atrás"
                                                   for i in range(1, 11)]})
     return alt.Chart(df).mark_square(size=420, opacity=1).encode(
-        x=alt.X("i:O", axis=None),
+        x=alt.X("i:O", title="Los 10 pilotos que el modelo pone en la zona de puntos",
+                axis=alt.Axis(labels=False, ticks=False, domain=False, titleFontSize=11, titlePadding=8)),
         color=alt.Color("res:N", scale=alt.Scale(domain=["terminó entre los 10 primeros", "terminó más atrás"],
                                                   range=[AZUL, "#e3e0d7"]),
                         legend=alt.Legend(title=None, orient="bottom", direction="vertical", labelFontSize=11,
                                           symbolType="square", symbolSize=120, rowPadding=4)),
-        tooltip=[alt.Tooltip("res:N", title="Qué pasó")]).properties(width=270, height=34)
+        tooltip=[alt.Tooltip("res:N", title="Qué pasó")]).properties(width=280, height=34)
 
 
 def g_kpi_abandono(e_ab, e_ok):
@@ -530,16 +545,18 @@ def g_kpi_abandono(e_ab, e_ok):
     df = pd.DataFrame([{"fin": "terminó", "quien": "terminan la carrera", "err": round(float(e_ok), 3)},
                        {"fin": "abandonó", "quien": "abandonan después", "err": round(float(e_ab), 3)}])
     base = alt.Chart(df).encode(
-        y=alt.Y("quien:N", sort=["terminan la carrera", "abandonan después"], title=None,
-                axis=alt.Axis(domain=False, ticks=False, labelFontSize=12, labelPadding=8, labelColor="#2b2a26")),
-        x=alt.X("err:Q", scale=alt.Scale(domain=[0, 9]), axis=None))
+        y=alt.Y("quien:N", sort=["terminan la carrera", "abandonan después"], title="Pilotos que",
+                axis=alt.Axis(domain=False, ticks=False, labelFontSize=12, labelPadding=8, labelColor="#2b2a26",
+                              titleFontSize=11)),
+        x=alt.X("err:Q", scale=alt.Scale(domain=[0, 9]), title="Puestos de error, en promedio",
+                axis=alt.Axis(values=[0, 2, 4, 6, 8], grid=False, domain=False, labelFontSize=11, titleFontSize=11)))
     barras = base.mark_bar(height=22, cornerRadiusEnd=3).encode(
         color=alt.Color("fin:N", scale=alt.Scale(domain=["terminó", "abandonó"], range=[CLARO, VINO]), legend=None),
         tooltip=[alt.Tooltip("quien:N", title="Pilotos que"),
                  alt.Tooltip("err:Q", title="Se equivoca en promedio (puestos)", format=".1f")])
     valores = base.mark_text(align="left", dx=6, fontSize=12, fontWeight=700, color=TINTA).encode(
         text=alt.Text("err:Q", format=".1f"))
-    return (barras + valores).properties(width=170, height=70)
+    return (barras + valores).properties(width=190, height=70)
 
 
 def g_explora(e, pc, inicial):
@@ -1403,6 +1420,7 @@ def textos(R, N, corr):
     top10_r = f(10 * tr.loc["Antes de largar", "top10_r_val"], 1)
     e_ab, e_ok = f(err_ex[ab_ex].mean(), 1), f(err_ex[~ab_ex].mean(), 1)
     z["kpi_datos"] = {"aciertos": int(round(10 * tr.loc["Antes de largar", "top10_m_val"])),
+                      "dist": dist_error(R["explora"]),
                       "e_ab": err_ex[ab_ex].mean(), "e_ok": err_ex[~ab_ex].mean()}
     z["kpis"] = [
         ("Cuánto se equivoca", f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}", "puestos de error, en promedio",
@@ -1761,7 +1779,7 @@ def pagina(R, N, hist, corr, salida):
              "g-explora": estilo(ex["panorama"]), "g-explora-tablas": estilo(ex["tablas"]),
              "g-explora-det": estilo(ex["detalle"]),
              "g-proba": estilo(g_proba_tabla()), "g-proba-apo": estilo(g_proba_aportes()),
-             "g-kpi-1": estilo(g_kpi_error(mod, regla)), "g-kpi-2": estilo(g_kpi_puntos(z["kpi_datos"]["aciertos"])),
+             "g-kpi-1": estilo(g_kpi_error(z["kpi_datos"]["dist"])), "g-kpi-2": estilo(g_kpi_puntos(z["kpi_datos"]["aciertos"])),
              "g-kpi-3": estilo(g_kpi_abandono(z["kpi_datos"]["e_ab"], z["kpi_datos"]["e_ok"]))}
     proba = {"carreras": {}, "momentos": {}, "inicial": inicial_p["c"], "piloto_inicial": inicial_p["piloto"]}
     for m in (0.0, 0.25, 0.5, 0.75):
