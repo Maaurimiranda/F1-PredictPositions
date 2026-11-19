@@ -487,6 +487,61 @@ def g_modelo(R):
                         subtitle=["Puntos: carreras de 2022 a 2025. Rombos: las 14 carreras de 2026, que el modelo nunca había visto."]))
 
 
+def g_kpi_error(mod, regla):
+    """Portada, tarjeta 1: cuánto se equivoca el modelo (azul) y «termina donde está» (naranja) en cada momento."""
+    quienes = ["«termina donde está»", "nuestro modelo"]
+    df = pd.DataFrame([{"momento": ETIQUETA[m], "quien": q, "mae": round(float(v[m]), 3)}
+                       for m in (0.0, 0.25, 0.5, 0.75) for q, v in zip(quienes, (regla, mod))])
+    base = alt.Chart(df).encode(
+        x=alt.X("momento:N", sort=MOMS, title=None,
+                axis=alt.Axis(labelAngle=0, domain=False, ticks=False, labelPadding=6, labelFontSize=11,
+                              labelExpr="datum.label == 'Antes de largar' ? 'largada' : datum.label")),
+        y=alt.Y("mae:Q", scale=alt.Scale(domain=[0, 4]), title=None,
+                axis=alt.Axis(labels=False, ticks=False, domain=False, tickCount=4)),
+        color=alt.Color("quien:N", scale=alt.Scale(domain=quienes, range=[NARANJA, AZUL]),
+                        legend=alt.Legend(title=None, orient="top", direction="horizontal", labelFontSize=11,
+                                          symbolSize=60, columnPadding=12)))
+    tip = [alt.Tooltip("quien:N", title="Quién predice"), alt.Tooltip("momento:N", title="Momento"),
+           alt.Tooltip("mae:Q", title="Se equivoca en promedio (puestos)", format=".2f")]
+    linea = base.mark_line(strokeWidth=2.5)
+    punto = base.mark_circle(size=55, opacity=1).encode(tooltip=tip)
+    abajo = base.transform_filter("datum.quien == 'nuestro modelo'").mark_text(
+        dy=9, baseline="top", fontSize=11, fontWeight=600).encode(text=alt.Text("mae:Q", format=".1f"))
+    arriba = base.transform_filter("datum.quien != 'nuestro modelo'").mark_text(
+        dy=-9, baseline="bottom", fontSize=11, fontWeight=600).encode(text=alt.Text("mae:Q", format=".1f"))
+    return (linea + punto + abajo + arriba).properties(width=270, height=130)
+
+
+def g_kpi_puntos(aciertos):
+    """Portada, tarjeta 2: de los diez que el modelo pone en la zona de puntos, cuántos terminan ahí."""
+    df = pd.DataFrame({"i": range(1, 11), "res": ["terminó entre los 10 primeros" if i <= aciertos else "terminó más atrás"
+                                                  for i in range(1, 11)]})
+    return alt.Chart(df).mark_square(size=420, opacity=1).encode(
+        x=alt.X("i:O", axis=None),
+        color=alt.Color("res:N", scale=alt.Scale(domain=["terminó entre los 10 primeros", "terminó más atrás"],
+                                                  range=[AZUL, "#e3e0d7"]),
+                        legend=alt.Legend(title=None, orient="bottom", direction="vertical", labelFontSize=11,
+                                          symbolType="square", symbolSize=120, rowPadding=4)),
+        tooltip=[alt.Tooltip("res:N", title="Qué pasó")]).properties(width=270, height=34)
+
+
+def g_kpi_abandono(e_ab, e_ok):
+    """Portada, tarjeta 3: el error con los que terminan (gris, como en «Los datos») y con los que abandonan (vino)."""
+    df = pd.DataFrame([{"fin": "terminó", "quien": "terminan la carrera", "err": round(float(e_ok), 3)},
+                       {"fin": "abandonó", "quien": "abandonan después", "err": round(float(e_ab), 3)}])
+    base = alt.Chart(df).encode(
+        y=alt.Y("quien:N", sort=["terminan la carrera", "abandonan después"], title=None,
+                axis=alt.Axis(domain=False, ticks=False, labelFontSize=12, labelPadding=8, labelColor="#2b2a26")),
+        x=alt.X("err:Q", scale=alt.Scale(domain=[0, 9]), axis=None))
+    barras = base.mark_bar(height=22, cornerRadiusEnd=3).encode(
+        color=alt.Color("fin:N", scale=alt.Scale(domain=["terminó", "abandonó"], range=[CLARO, VINO]), legend=None),
+        tooltip=[alt.Tooltip("quien:N", title="Pilotos que"),
+                 alt.Tooltip("err:Q", title="Se equivoca en promedio (puestos)", format=".1f")])
+    valores = base.mark_text(align="left", dx=6, fontSize=12, fontWeight=700, color=TINTA).encode(
+        text=alt.Text("err:Q", format=".1f"))
+    return (barras + valores).properties(width=170, height=70)
+
+
 def g_explora(e, pc, inicial):
     temps = sorted(e["temp"].unique())
     pil = (e.drop_duplicates("piloto").sort_values("nombre"))
@@ -772,7 +827,9 @@ h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin
 h4{font-size:15px;margin:22px 0 6px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
 .kpis{display:grid;grid-template-columns:1fr;gap:16px;margin:8px 0 28px}
-.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 28px;border-left:6px solid var(--azul);display:grid;grid-template-columns:minmax(220px,290px) 1fr;grid-template-areas:"etq que" "num que" "tit ctx";column-gap:36px;align-items:start}
+.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 28px;border-left:6px solid var(--azul);display:grid;grid-template-columns:minmax(200px,250px) 1fr 300px;grid-template-areas:"etq que graf" "num que graf" "tit ctx graf";column-gap:32px;align-items:start}
+.kpi .graf{grid-area:graf;align-self:center;justify-self:end;min-height:120px}
+.kpi .graf .vega-embed{display:block}
 .kpi:nth-child(3){border-left-color:var(--vino)}
 .kpi .etq{grid-area:etq;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--tenue)}
 .kpi .num{grid-area:num;font-size:clamp(40px,4.6vw,54px);font-weight:800;letter-spacing:-.025em;line-height:1.05;font-variant-numeric:tabular-nums;margin-top:8px}
@@ -780,7 +837,8 @@ h4{font-size:15px;margin:22px 0 6px}
 .kpi .que{grid-area:que;color:var(--suave);font-size:16px;line-height:1.6;margin:0;align-self:center}
 .kpi .ctx{grid-area:ctx;align-self:end;margin-top:14px;padding-top:12px;border-top:1px dashed var(--borde);font-size:14.5px;line-height:1.45;color:var(--suave)}
 .kpi .ctx b{color:var(--tinta)}
-@media (max-width:760px){.kpi{grid-template-columns:1fr;grid-template-areas:"etq" "num" "tit" "que" "ctx";padding:20px 20px}.kpi .que{margin-top:12px}}
+@media (max-width:980px){.kpi{grid-template-columns:minmax(200px,250px) 1fr;grid-template-areas:"etq que" "num que" "tit ctx" "graf graf"}.kpi .graf{justify-self:start;margin-top:16px}}
+@media (max-width:760px){.kpi{grid-template-columns:1fr;grid-template-areas:"etq" "num" "tit" "que" "graf" "ctx";padding:20px 20px}.kpi .que{margin-top:12px}.kpi .graf{max-width:100%;overflow-x:auto}}
 .guia{color:var(--suave);font-size:15px;max-width:70ch}
 .lectura{max-width:72ch;color:#2b2a26;margin:0 0 16px}
 .grafico{background:var(--papel);border:1px solid var(--borde);border-radius:14px;padding:14px;overflow-x:auto;margin:6px 0 14px}
@@ -1343,6 +1401,8 @@ def textos(R, N, corr):
                  "abrí «Cómo lo sabemos» en cada parte. Al final podés recorrer todas las carreras y probar el modelo vos mismo.")
     top10_r = f(10 * tr.loc["Antes de largar", "top10_r_val"], 1)
     e_ab, e_ok = f(err_ex[ab_ex].mean(), 1), f(err_ex[~ab_ex].mean(), 1)
+    z["kpi_datos"] = {"aciertos": int(round(10 * tr.loc["Antes de largar", "top10_m_val"])),
+                      "e_ab": err_ex[ab_ex].mean(), "e_ok": err_ex[~ab_ex].mean()}
     z["kpis"] = [
         ("Cuánto se equivoca", f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}", "puestos de error, en promedio",
          f"Si un piloto termina 5.º y el modelo había dicho 3.º, se equivocó por 2 puestos. Antes de la largada el error "
@@ -1699,7 +1759,9 @@ def pagina(R, N, hist, corr, salida):
              "g-modelo": estilo(g_modelo(R)), "g-tabla": estilo(g_tabla(res)),
              "g-explora": estilo(ex["panorama"]), "g-explora-tablas": estilo(ex["tablas"]),
              "g-explora-det": estilo(ex["detalle"]),
-             "g-proba": estilo(g_proba_tabla()), "g-proba-apo": estilo(g_proba_aportes())}
+             "g-proba": estilo(g_proba_tabla()), "g-proba-apo": estilo(g_proba_aportes()),
+             "g-kpi-1": estilo(g_kpi_error(mod, regla)), "g-kpi-2": estilo(g_kpi_puntos(z["kpi_datos"]["aciertos"])),
+             "g-kpi-3": estilo(g_kpi_abandono(z["kpi_datos"]["e_ab"], z["kpi_datos"]["e_ok"]))}
     proba = {"carreras": {}, "momentos": {}, "inicial": inicial_p["c"], "piloto_inicial": inicial_p["piloto"]}
     for m in (0.0, 0.25, 0.5, 0.75):
         P, k = R["proba"][m], CORTO[m]
@@ -1725,7 +1787,8 @@ def pagina(R, N, hist, corr, salida):
             "arbol": P["terminos"]["arbol"] if P["tipo"] == "árbol" else None}
     specs_json = json.dumps({k: v.to_dict() for k, v in specs.items()}, ensure_ascii=False, separators=(",", ":"))
     kpis = "".join(f'<div class="kpi"><div class="etq">{e}</div><div class="num">{a}</div><div class="tit">{t}</div>'
-                   f'<div class="que">{b}</div><div class="ctx">{c}</div></div>' for e, a, t, b, c in z["kpis"])
+                   f'<div class="que">{b}</div><div class="ctx">{c}</div><div class="graf" id="g-kpi-{i}"></div></div>'
+                   for i, (e, a, t, b, c) in enumerate(z["kpis"], 1))
     html = (PLANTILLA.replace("__IDEA__", z["idea"]).replace("__KPIS__", kpis)
             .replace("__T_DATOS__", z["t_datos"]).replace("__L_DATOS__", z["l_datos"]).replace("__C_DATOS__", como_datos(N))
             .replace("__T_HALLAZGO__", z["t_hallazgo"]).replace("__L_HALLAZGO__", z["l_hallazgo"])
