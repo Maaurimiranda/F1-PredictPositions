@@ -771,11 +771,15 @@ h1{font-size:clamp(32px,5vw,50px);line-height:1.08;letter-spacing:-.025em;margin
 h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin:10px 0 12px;max-width:34ch}
 h4{font-size:15px;margin:22px 0 6px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
-.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:0 0 22px}
-.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:14px;padding:18px 18px 16px;border-top:4px solid var(--azul)}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:8px 0 28px}
+.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 24px 20px;border-top:5px solid var(--azul);display:flex;flex-direction:column}
 .kpi:nth-child(3){border-top-color:var(--vino)}
-.kpi .num{font-size:34px;font-weight:800;letter-spacing:-.02em;line-height:1.1;font-variant-numeric:tabular-nums}
-.kpi .que{color:var(--suave);font-size:14px;line-height:1.45;margin-top:6px}
+.kpi .etq{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--tenue)}
+.kpi .num{font-size:clamp(40px,4.6vw,52px);font-weight:800;letter-spacing:-.025em;line-height:1.05;font-variant-numeric:tabular-nums;margin-top:10px}
+.kpi .tit{font-size:17px;font-weight:700;line-height:1.3;color:var(--tinta);margin-top:6px}
+.kpi .que{color:var(--suave);font-size:15.5px;line-height:1.55;margin:12px 0 18px}
+.kpi .ctx{margin-top:auto;padding-top:12px;border-top:1px dashed var(--borde);font-size:14px;line-height:1.45;color:var(--suave)}
+.kpi .ctx b{color:var(--tinta)}
 .guia{color:var(--suave);font-size:15px;max-width:70ch}
 .lectura{max-width:72ch;color:#2b2a26;margin:0 0 16px}
 .grafico{background:var(--papel);border:1px solid var(--borde);border-radius:14px;padding:14px;overflow-x:auto;margin:6px 0 14px}
@@ -1336,14 +1340,25 @@ def textos(R, N, corr):
                  "cuando ya se corrió un cuarto, la mitad y tres cuartos de la carrera, usando sólo lo que se sabe hasta ese "
                  "momento. Abajo contamos qué datos usamos, qué descubrimos y qué tan bien funciona; si querés ver las pruebas, "
                  "abrí «Cómo lo sabemos» en cada parte. Al final podés recorrer todas las carreras y probar el modelo vos mismo.")
-    z["kpis"] = [(f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}",
-                  f"antes de la largada se equivoca {f(mod[0.0], 1)} puestos en promedio y cuando llevamos el 75 % de la "
-                  f"carrera, {f(mod[0.75], 1)} puestos"),
-                 (f"{top10} de 10",
-                  "pilotos que el modelo pone en la zona de puntos antes de la largada terminan ahí"),
-                 (f"{f(err_ex[ab_ex].mean(), 1)}",
-                  f"puestos se equivoca, antes de la largada, con un piloto que después abandona (con el resto, "
-                  f"{f(err_ex[~ab_ex].mean(), 1)}): los abandonos no se pueden prever y son la mayor causa de error del modelo")]
+    top10_r = f(10 * tr.loc["Antes de largar", "top10_r_val"], 1)
+    e_ab, e_ok = f(err_ex[ab_ex].mean(), 1), f(err_ex[~ab_ex].mean(), 1)
+    z["kpis"] = [
+        ("Cuánto se equivoca", f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}", "puestos de error, en promedio",
+         f"Si un piloto termina 5.º y el modelo había dicho 3.º, se equivocó por 2 puestos. Antes de la largada el error "
+         f"promedio es de {f(mod[0.0], 1)} puestos; con el 75 % de la carrera corrida baja a {f(mod[0.75], 1)}, porque ya "
+         f"queda poco por pasar.",
+         f"Decir que cada piloto termina donde va erra <b>{f(regla[0.0], 1)}</b> y <b>{f(regla[0.75], 1)}</b> puestos."),
+        ("Zona de puntos", f"{top10} de 10", "aciertos entre los diez primeros, antes de la largada",
+         "Sólo los diez primeros de cada carrera suman puntos. Antes de que se apague el semáforo, de los diez pilotos "
+         "que el modelo pone en esa zona, en promedio ocho terminan efectivamente entre los diez primeros."
+         if top10 == "8" else
+         f"Sólo los diez primeros de cada carrera suman puntos. Antes de que se apague el semáforo, de los diez pilotos "
+         f"que el modelo pone en esa zona, en promedio {top10} terminan efectivamente entre los diez primeros.",
+         f"Usando sólo la grilla de largada se aciertan <b>{top10_r} de 10</b>."),
+        ("La mayor causa de error", e_ab, "puestos de error con los pilotos que abandonan",
+         f"Un auto que se rompe o choca termina al fondo, y eso no se puede saber antes de que pase. Antes de la largada, "
+         f"con esos pilotos el modelo se equivoca {e_ab} puestos en promedio; con los que terminan la carrera, {e_ok}.",
+         "Por eso el error no llega a cero, ni siquiera al final de la carrera.")]
     # 1 · Los datos
     z["t_datos"] = ("Más de la mitad de los pilotos termina a dos lugares o menos de donde largó; los que pierden muchos "
                     "lugares son, casi siempre, los que abandonan")
@@ -1708,7 +1723,8 @@ def pagina(R, N, hist, corr, salida):
             "lineal": P["terminos"] if P["tipo"] == "lineal" else None,
             "arbol": P["terminos"]["arbol"] if P["tipo"] == "árbol" else None}
     specs_json = json.dumps({k: v.to_dict() for k, v in specs.items()}, ensure_ascii=False, separators=(",", ":"))
-    kpis = "".join(f'<div class="kpi"><div class="num">{a}</div><div class="que">{b}</div></div>' for a, b in z["kpis"])
+    kpis = "".join(f'<div class="kpi"><div class="etq">{e}</div><div class="num">{a}</div><div class="tit">{t}</div>'
+                   f'<div class="que">{b}</div><div class="ctx">{c}</div></div>' for e, a, t, b, c in z["kpis"])
     html = (PLANTILLA.replace("__IDEA__", z["idea"]).replace("__KPIS__", kpis)
             .replace("__T_DATOS__", z["t_datos"]).replace("__L_DATOS__", z["l_datos"]).replace("__C_DATOS__", como_datos(N))
             .replace("__T_HALLAZGO__", z["t_hallazgo"]).replace("__L_HALLAZGO__", z["l_hallazgo"])
