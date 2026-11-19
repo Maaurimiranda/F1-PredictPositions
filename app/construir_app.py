@@ -826,6 +826,7 @@ h1{font-size:clamp(32px,5vw,50px);line-height:1.08;letter-spacing:-.025em;margin
 h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin:10px 0 12px;max-width:34ch}
 h4{font-size:15px;margin:22px 0 6px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
+#portada h1,#portada .idea{max-width:none}
 .kpis{display:grid;grid-template-columns:1fr;gap:16px;margin:8px 0 28px}
 .kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 28px;border-left:6px solid var(--azul);display:grid;grid-template-columns:minmax(200px,250px) 1fr 300px;grid-template-areas:"etq que graf" "num que graf" "tit ctx graf";column-gap:32px;align-items:start}
 .kpi .graf{grid-area:graf;align-self:center;justify-self:end;min-height:120px}
