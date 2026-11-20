@@ -840,7 +840,7 @@ section:last-of-type{border-bottom:0}
 .parte{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--suave)}
 .parte::before{content:"";width:22px;height:4px;border-radius:2px;background:var(--rojo)}
 h1{font-size:clamp(32px,5vw,50px);line-height:1.08;letter-spacing:-.025em;margin:14px 0 18px;max-width:20ch}
-h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin:10px 0 12px;max-width:34ch}
+h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin:10px 0 12px;max-width:none}
 h4{font-size:15px;margin:22px 0 6px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
 #portada h1,#portada .idea{max-width:none}
@@ -857,8 +857,8 @@ h4{font-size:15px;margin:22px 0 6px}
 .kpi .ctx b{color:var(--tinta)}
 @media (max-width:1080px){.kpi{grid-template-columns:minmax(200px,250px) 1fr;grid-template-areas:"etq que" "num que" "tit ctx" "graf graf"}.kpi .graf{justify-self:start;margin-top:16px}}
 @media (max-width:760px){.kpi{grid-template-columns:1fr;grid-template-areas:"etq" "num" "tit" "que" "graf" "ctx";padding:20px 20px}.kpi .que{margin-top:12px}.kpi .graf{max-width:100%;overflow-x:auto}}
-.guia{color:var(--suave);font-size:15px;max-width:70ch}
-.lectura{max-width:72ch;color:#2b2a26;margin:0 0 16px}
+.guia{color:var(--suave);font-size:15px;max-width:none}
+.lectura{max-width:none;color:#2b2a26;margin:0 0 16px}
 .grafico{background:var(--papel);border:1px solid var(--borde);border-radius:14px;padding:14px;overflow-x:auto;margin:6px 0 14px}
 .grafico .vega-embed{display:block}
 .leyenda{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--suave);margin:4px 0 8px}
@@ -905,7 +905,7 @@ button.volver:hover{background:var(--tinta);color:#fff}
 .desl .vega-bind-value{font-weight:700;font-variant-numeric:tabular-nums;margin-left:8px}
 .modelo-usado{font-size:13.5px;color:var(--suave);margin:8px 0 0}
 .aviso{background:#fff6e0;border:1px solid #f0d48a;color:#6b4e00;border-radius:10px;padding:10px 14px;font-size:14px;margin:8px 0}
-.queToca{font-size:14px;color:var(--suave);max-width:80ch}
+.queToca{font-size:14px;color:var(--suave);max-width:none}
 .controles.chico{padding:10px 16px}
 .eje-e{font-size:13.5px;color:var(--suave);margin:10px 0 4px;display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center}.eje-e .volver{margin-left:auto;padding:5px 11px;font-size:13px}.eje-e strong{color:var(--tinta);font-weight:600}
 .cuenta{font-size:15px;margin:4px 0 8px}.cuenta b{color:var(--azul)}
