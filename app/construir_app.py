@@ -855,6 +855,10 @@ h4{font-size:15px;margin:22px 0 6px}
 .kpi .que{grid-area:que;color:var(--suave);font-size:16px;line-height:1.6;margin:0;align-self:center}
 .kpi .ctx{grid-area:ctx;align-self:end;margin-top:14px;padding-top:12px;border-top:1px dashed var(--borde);font-size:14.5px;line-height:1.45;color:var(--suave)}
 .kpi .ctx b{color:var(--tinta)}
+.kpi .num.doble{display:flex;align-items:flex-start;gap:12px}
+.kpi .num.doble .v{display:flex;flex-direction:column}
+.kpi .num.doble .fl{color:var(--tenue);font-weight:400}
+.kpi .num.doble small{font-size:13px;font-weight:600;letter-spacing:0;line-height:1.3;color:var(--suave);margin-top:6px;max-width:9em}
 @media (max-width:1080px){.kpi{grid-template-columns:minmax(200px,250px) 1fr;grid-template-areas:"etq que" "num que" "tit ctx" "graf graf"}.kpi .graf{justify-self:start;margin-top:16px}}
 @media (max-width:760px){.kpi{grid-template-columns:1fr;grid-template-areas:"etq" "num" "tit" "que" "graf" "ctx";padding:20px 20px}.kpi .que{margin-top:12px}.kpi .graf{max-width:100%;overflow-x:auto}}
 .guia{color:var(--suave);font-size:15px;max-width:none}
@@ -1423,11 +1427,12 @@ def textos(R, N, corr):
                       "dist": dist_error(R["explora"]),
                       "e_ab": err_ex[ab_ex].mean(), "e_ok": err_ex[~ab_ex].mean()}
     z["kpis"] = [
-        ("Cuánto se equivoca", f"{f(mod[0.0], 1)} → {f(mod[0.75], 1)}", "puestos de error, en promedio",
-         f"Si un piloto termina 5.º y el modelo había dicho 3.º, se equivocó por 2 puestos. Antes de la largada el error "
-         f"promedio es de {f(mod[0.0], 1)} puestos; con el 75&nbsp;% de la carrera corrida baja a {f(mod[0.75], 1)}, porque ya "
-         f"queda poco por pasar.",
-         f"Decir que cada piloto termina donde va erra <b>{f(regla[0.0], 1)}</b> y <b>{f(regla[0.75], 1)}</b> puestos."),
+        ("¿Cuántos puestos se equivoca?",
+         f'<span class="v">{f(mod[0.0], 1)}<small>antes de la largada</small></span><span class="fl">→</span>'
+         f'<span class="v">{f(mod[0.75], 1)}<small>al 75&nbsp;% de la carrera</small></span>', "",
+         "Si un piloto termina 5.º y el modelo había dicho 3.º, se equivocó por 2 puestos. Los números son el promedio "
+         "de todos los pilotos: cuanto más avanza la carrera, menos queda por pasar y menos se equivoca.",
+         f"Sin modelo (cada uno termina donde va): <b>{f(regla[0.0], 1)} → {f(regla[0.75], 1)}</b>"),
         ("Zona de puntos", f"{top10} de 10", "aciertos entre los diez primeros, antes de la largada",
          "Sólo los diez primeros de cada carrera suman puntos. Antes de que se apague el semáforo, de los diez pilotos "
          "que el modelo pone en esa zona, en promedio ocho terminan efectivamente entre los diez primeros."
@@ -1805,8 +1810,10 @@ def pagina(R, N, hist, corr, salida):
             "lineal": P["terminos"] if P["tipo"] == "lineal" else None,
             "arbol": P["terminos"]["arbol"] if P["tipo"] == "árbol" else None}
     specs_json = json.dumps({k: v.to_dict() for k, v in specs.items()}, ensure_ascii=False, separators=(",", ":"))
-    kpis = "".join(f'<div class="kpi"><div class="etq">{e}</div><div class="num">{a}</div><div class="tit">{t}</div>'
-                   f'<div class="que">{b}</div><div class="ctx">{c}</div><div class="graf" id="g-kpi-{i}"></div></div>'
+    # Sin frase debajo del número (tarjeta 1): el número lleva sus propios rótulos y va en formato doble
+    kpis = "".join(f'<div class="kpi"><div class="etq">{e}</div>'
+                   + (f'<div class="num">{a}</div><div class="tit">{t}</div>' if t else f'<div class="num doble">{a}</div>')
+                   + f'<div class="que">{b}</div><div class="ctx">{c}</div><div class="graf" id="g-kpi-{i}"></div></div>'
                    for i, (e, a, t, b, c) in enumerate(z["kpis"], 1))
     html = (PLANTILLA.replace("__IDEA__", z["idea"]).replace("__KPIS__", kpis)
             .replace("__T_DATOS__", z["t_datos"]).replace("__L_DATOS__", z["l_datos"]).replace("__C_DATOS__", como_datos(N))
