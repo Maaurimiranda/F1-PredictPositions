@@ -2,7 +2,7 @@
 
 Proyecto integrador de Ciencia de Datos (UTN FRM, 2026, Grupo 8 · 5K09): predecir la **posición de llegada** de cada piloto de Fórmula 1 en cuatro momentos de la carrera, antes de largar y al 25, 50 y 75 %.
 
-El repositorio tiene la cadena completa: el **pipeline** que baja y limpia los datos (Airflow, `dags/` e `include/f1/`), el **análisis** de la Entrega 2 y el **modelo** de la Entrega 3 (notebooks en `include/`), y la **aplicación** de la Entrega 4 (`app/` genera `docs/index.html`, publicada en GitHub Pages: https://maaurimiranda.github.io/f1-predictpositions/). Cómo se corre cada parte: [«Cómo se corre todo, de punta a punta»](#cómo-se-corre-todo-de-punta-a-punta).
+El repositorio tiene la cadena completa: el **pipeline** que baja y limpia los datos (Airflow, `dags/` e `include/f1/`), el **análisis** de la Entrega 2 y el **modelo** de la Entrega 3 (notebooks en `include/`), y la **aplicación** de la Entrega 4 (`app/` genera `docs/index.html`, publicada en GitHub Pages: https://maaurimiranda.github.io/F1-PredictPositions/). Cómo se corre cada parte: [«Cómo se corre todo, de punta a punta»](#cómo-se-corre-todo-de-punta-a-punta).
 
 ## Pregunta de investigación
 
@@ -97,7 +97,7 @@ El proyecto es una sola cadena: el pipeline produce los datos, los notebooks los
 
 ## La aplicación (Entrega 4)
 
-La versión final del proyecto es una página web: **https://maaurimiranda.github.io/f1-predictpositions/** (GitHub Pages, carpeta `docs/`).
+La versión final del proyecto es una página web: **https://maaurimiranda.github.io/F1-PredictPositions/** (GitHub Pages, carpeta `docs/`).
 Cuenta el proyecto en orden (portada, los datos, lo que encontramos, el modelo) y después deja explorar las predicciones y probar el modelo con un caso propio.
 
 ### Cómo se regenera
