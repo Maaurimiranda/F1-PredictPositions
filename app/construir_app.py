@@ -503,27 +503,27 @@ def dist_error(e):
 
 
 def g_kpi_error(dist):
-    """Portada, tarjeta 1: a qué distancia del puesto real queda cada predicción, en cada momento."""
+    """Portada, tarjeta 1: a qué distancia del puesto real queda cada predicción, en cada momento (columnas, 0 % a 75 %)."""
     df = pd.DataFrame(dist)
-    base = alt.Chart(df).encode(
-        y=alt.Y("m:N", sort=MOMS, title="Momento de la carrera",
-                axis=alt.Axis(domain=False, ticks=False, labelFontSize=11, labelPadding=6, titleFontSize=11,
-                              labelExpr="datum.label == 'Antes de largar' ? '0 %' : datum.label")),
-        x=alt.X("pct:Q", stack="normalize", title="Parte de los pilotos",
+    x = alt.X("m:N", sort=MOMS, title="Momento de la carrera",
+              axis=alt.Axis(labelAngle=0, domain=False, ticks=False, labelFontSize=11, labelPadding=6, titleFontSize=11,
+                            labelExpr="datum.label == 'Antes de largar' ? '0 %' : datum.label"))
+    barras = alt.Chart(df).mark_bar(width=alt.RelativeBandSize(0.7)).encode(
+        x=x,
+        y=alt.Y("pct:Q", stack="normalize", title="Parte de los pilotos",
                 axis=alt.Axis(format="%", values=[0, 0.5, 1], grid=False, domain=False, ticks=False,
                               labelFontSize=11, titleFontSize=11)),
-        order=alt.Order("orden:Q"))
-    barras = base.mark_bar(height=18).encode(
+        order=alt.Order("orden:Q"),
         color=alt.Color("tramo:N", scale=alt.Scale(domain=TRAMOS_ERR, range=AZULES), sort=TRAMOS_ERR,
                         legend=alt.Legend(title="Lejos del puesto real:", orient="top", direction="horizontal",
                                           labelFontSize=11, titleFontSize=11, symbolType="square", symbolSize=90,
                                           columnPadding=8, titleOrient="top")),
         tooltip=[alt.Tooltip("m:N", title="Momento"), alt.Tooltip("tramo:N", title="Se equivocó"),
                  alt.Tooltip("pct:Q", title="Parte de los pilotos", format=".0%")])
-    exacto = base.transform_filter("datum.tramo == 'exacto'").mark_text(
-        align="left", x=5, color="#ffffff", fontSize=11, fontWeight=700).encode(
-        x=alt.value(5), text=alt.Text("pct:Q", format=".0%"))
-    return (barras + exacto).properties(width=280, height=120)
+    exacto = alt.Chart(df).transform_filter("datum.tramo == 'exacto'").mark_text(
+        baseline="top", dy=4, color="#ffffff", fontSize=11, fontWeight=700).encode(
+        x=x, y=alt.Y("pct:Q"), text=alt.Text("pct:Q", format=".0%"))
+    return (barras + exacto).properties(width=260, height=150)
 
 
 def g_kpi_puntos(aciertos):
