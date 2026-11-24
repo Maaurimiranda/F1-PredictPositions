@@ -1432,8 +1432,7 @@ def textos(R, N, corr):
          f'<span class="v">{f(mod[0.75], 0)}<small>al 75&nbsp;% de la carrera</small></span>', "",
          "Si un piloto termina 5.º y el modelo había dicho 3.º, se equivocó por 2 puestos. Los números son el promedio "
          "de todos los pilotos: cuanto más avanza la carrera, menos queda por pasar y menos se equivoca.",
-         f"Con decimales, el modelo erra <b>{f(mod[0.0], 1)} → {f(mod[0.75], 1)}</b>; sin modelo (cada uno termina "
-         f"donde va), <b>{f(regla[0.0], 1)} → {f(regla[0.75], 1)}</b>."),
+         f"En cifras exactas, el modelo pasa de <b>{f(mod[0.0], 1)}</b> a <b>{f(mod[0.75], 1)}</b> puestos de error."),
         ("Zona de puntos", f"{top10} de 10", "aciertos entre los diez primeros, antes de la largada",
          "Sólo los diez primeros de cada carrera suman puntos. Antes de que se apague el semáforo, de los diez pilotos "
          "que el modelo pone en esa zona, en promedio ocho terminan efectivamente entre los diez primeros."
