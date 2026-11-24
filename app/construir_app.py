@@ -508,7 +508,7 @@ def g_kpi_error(dist):
     base = alt.Chart(df).encode(
         y=alt.Y("m:N", sort=MOMS, title="Momento de la carrera",
                 axis=alt.Axis(domain=False, ticks=False, labelFontSize=11, labelPadding=6, titleFontSize=11,
-                              labelExpr="datum.label == 'Antes de largar' ? 'largada' : datum.label")),
+                              labelExpr="datum.label == 'Antes de largar' ? '0 %' : datum.label")),
         x=alt.X("pct:Q", stack="normalize", title="Parte de los pilotos",
                 axis=alt.Axis(format="%", values=[0, 0.5, 1], grid=False, domain=False, ticks=False,
                               labelFontSize=11, titleFontSize=11)),
