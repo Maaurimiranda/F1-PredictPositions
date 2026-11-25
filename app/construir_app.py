@@ -540,23 +540,30 @@ def g_kpi_puntos(aciertos):
         tooltip=[alt.Tooltip("res:N", title="Qué pasó")]).properties(width=280, height=34)
 
 
-def g_kpi_abandono(e_ab, e_ok):
-    """Portada, tarjeta 3: el error con los que terminan (gris, como en «Los datos») y con los que abandonan (vino)."""
-    df = pd.DataFrame([{"fin": "terminó", "quien": "terminan la carrera", "err": round(float(e_ok), 3)},
-                       {"fin": "abandonó", "quien": "abandonan después", "err": round(float(e_ab), 3)}])
-    base = alt.Chart(df).encode(
-        y=alt.Y("quien:N", sort=["terminan la carrera", "abandonan después"], title="Pilotos que",
-                axis=alt.Axis(domain=False, ticks=False, labelFontSize=12, labelPadding=8, labelColor="#2b2a26",
-                              titleFontSize=11)),
-        x=alt.X("err:Q", scale=alt.Scale(domain=[0, 9]), title="Puestos de error, en promedio",
-                axis=alt.Axis(values=[0, 2, 4, 6, 8], grid=False, domain=False, labelFontSize=11, titleFontSize=11)))
-    barras = base.mark_bar(height=22, cornerRadiusEnd=3).encode(
-        color=alt.Color("fin:N", scale=alt.Scale(domain=["terminó", "abandonó"], range=[CLARO, VINO]), legend=None),
-        tooltip=[alt.Tooltip("quien:N", title="Pilotos que"),
-                 alt.Tooltip("err:Q", title="Se equivoca en promedio (puestos)", format=".1f")])
-    valores = base.mark_text(align="left", dx=6, fontSize=12, fontWeight=700, color=TINTA).encode(
-        text=alt.Text("err:Q", format=".1f"))
-    return (barras + valores).properties(width=190, height=70)
+def g_kpi_abandono(p_pilotos, p_error):
+    """Portada, tarjeta 3: qué parte de los pilotos abandona y qué parte del error total explican (antes de la largada)."""
+    filas = ["Parte de los pilotos", "Parte del error"]
+    df = pd.DataFrame([{"fila": filas[0], "fin": "abandonaron", "o": 0, "pct": round(float(p_pilotos), 3)},
+                       {"fila": filas[0], "fin": "terminaron", "o": 1, "pct": round(1 - float(p_pilotos), 3)},
+                       {"fila": filas[1], "fin": "abandonaron", "o": 0, "pct": round(float(p_error), 3)},
+                       {"fila": filas[1], "fin": "terminaron", "o": 1, "pct": round(1 - float(p_error), 3)}])
+    y = alt.Y("fila:N", sort=filas, title=None,
+              axis=alt.Axis(domain=False, ticks=False, labelFontSize=12, labelPadding=8, labelColor="#2b2a26"))
+    barras = alt.Chart(df).mark_bar(height=22).encode(
+        y=y,
+        x=alt.X("pct:Q", stack="zero", scale=alt.Scale(domain=[0, 1]), title="Porcentaje del total",
+                axis=alt.Axis(format="%", values=[0, 0.25, 0.5, 0.75, 1], grid=False, domain=False,
+                              labelFontSize=11, titleFontSize=11)),
+        order=alt.Order("o:Q"),
+        color=alt.Color("fin:N", scale=alt.Scale(domain=["abandonaron", "terminaron"], range=[VINO, CLARO]),
+                        legend=alt.Legend(title=None, orient="top", direction="horizontal", labelFontSize=11,
+                                          symbolType="square", symbolSize=100, offset=6)),
+        tooltip=[alt.Tooltip("fila:N", title=" "), alt.Tooltip("fin:N", title="Pilotos que"),
+                 alt.Tooltip("pct:Q", title="Porcentaje", format=".0%")])
+    valores = alt.Chart(df).transform_filter("datum.fin == 'abandonaron'").mark_text(
+        align="left", dx=6, fontSize=12, fontWeight=700, color=TINTA).encode(
+        y=y, x=alt.X("pct:Q"), text=alt.Text("pct:Q", format=".0%"))
+    return (barras + valores).properties(width=210, height=80)
 
 
 def g_explora(e, pc, inicial):
@@ -1477,7 +1484,8 @@ def textos(R, N, corr):
     e_ab, e_ok = f(err_ex[ab_ex].mean(), 1), f(err_ex[~ab_ex].mean(), 1)
     z["kpi_datos"] = {"aciertos": int(round(10 * tr.loc["Antes de largar", "top10_m_val"])),
                       "dist": dist_error(R["explora"]),
-                      "e_ab": err_ex[ab_ex].mean(), "e_ok": err_ex[~ab_ex].mean()}
+                      "e_ab": err_ex[ab_ex].mean(), "e_ok": err_ex[~ab_ex].mean(),
+                      "p_pilotos": ab_ex.mean(), "p_error": err_ex[ab_ex].sum() / err_ex.sum()}
     z["kpis"] = [
         ("¿Cuántos puestos se equivoca?",
          f'<span class="v">{f(mod[0.0], 0)}<small>antes de la largada</small></span><span class="fl">→</span>'
@@ -1826,7 +1834,7 @@ def pagina(R, N, hist, corr, salida):
              "g-explora-det": estilo(ex["detalle"]),
              "g-proba": estilo(g_proba_tabla()), "g-proba-apo": estilo(g_proba_aportes()),
              "g-kpi-1": estilo(g_kpi_error(z["kpi_datos"]["dist"])), "g-kpi-2": estilo(g_kpi_puntos(z["kpi_datos"]["aciertos"])),
-             "g-kpi-3": estilo(g_kpi_abandono(z["kpi_datos"]["e_ab"], z["kpi_datos"]["e_ok"]))}
+             "g-kpi-3": estilo(g_kpi_abandono(z["kpi_datos"]["p_pilotos"], z["kpi_datos"]["p_error"]))}
     proba = {"carreras": {}, "momentos": {}, "inicial": inicial_p["c"], "piloto_inicial": inicial_p["piloto"]}
     for m in (0.0, 0.25, 0.5, 0.75):
         P, k = R["proba"][m], CORTO[m]
