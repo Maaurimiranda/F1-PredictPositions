@@ -847,7 +847,7 @@ h4{font-size:15px;margin:22px 0 6px}
 .kpis{display:grid;grid-template-columns:1fr;gap:16px;margin:8px 0 28px}
 .tip-corto{position:fixed;z-index:60;pointer-events:none;background:var(--tinta);color:#fff;border-radius:8px;padding:7px 10px;font-size:13px;line-height:1.4;max-width:280px;box-shadow:0 4px 14px rgba(0,0,0,.18)}.tip-corto span{opacity:.75}.tip-corto .clic{opacity:.7;font-size:11.5px;margin-top:3px}.panel-e{position:fixed;z-index:55;top:0;right:0;height:100vh;width:min(360px,92vw);box-sizing:border-box;overflow:auto;background:var(--papel);border-left:1px solid var(--borde);box-shadow:-8px 0 24px rgba(0,0,0,.10);padding:22px 22px 28px}.panel-e h3{margin:0 34px 4px 0;font-size:18px;line-height:1.3}.panel-e .sub{color:var(--suave);font-size:13px;margin:0 0 14px}.panel-e dl{margin:0;display:grid;grid-template-columns:1fr;gap:0}.panel-e dt{color:var(--suave);font-size:13px;margin-top:10px}.panel-e dd{margin:2px 0 0;font-size:16px;font-weight:600;padding-bottom:8px;border-bottom:1px solid var(--borde)}.panel-e .cerrar{position:absolute;top:14px;right:14px;width:32px;height:32px;border-radius:50%;border:1px solid var(--borde);background:#fff;font-size:18px;line-height:1;cursor:pointer}.panel-e .cerrar:hover{background:var(--tinta);color:#fff}@media (max-width:760px){.panel-e{top:auto;bottom:0;height:auto;max-height:65vh;width:100%;border-left:none;border-top:1px solid var(--borde);border-radius:16px 16px 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.12)}}
 .pista{margin:4px 0 24px;background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:18px 20px 10px}.pista figcaption{font-size:15px;color:var(--suave);margin-bottom:8px}.pista-svg{overflow-x:auto}.pista svg{display:block;width:100%;min-width:600px;height:auto}
-.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 28px;border-left:6px solid var(--azul);display:grid;grid-template-columns:minmax(190px,230px) minmax(0,1fr) 370px;grid-template-areas:"etq que graf" "num que graf" "tit ctx graf";column-gap:32px;align-items:start}
+.kpi{background:var(--papel);border:1px solid var(--borde);border-radius:16px;padding:24px 28px;border-left:6px solid var(--azul);display:grid;grid-template-columns:minmax(210px,250px) minmax(0,1fr) 370px;grid-template-areas:"etq que graf" "num que graf" "tit ctx graf";column-gap:32px;align-items:start}
 .kpi .graf{grid-area:graf;align-self:center;justify-self:end;min-height:120px;max-width:370px}
 .kpi .graf .vega-embed{display:block}
 .kpi:nth-child(3){border-left-color:var(--vino)}
@@ -857,10 +857,10 @@ h4{font-size:15px;margin:22px 0 6px}
 .kpi .que{grid-area:que;color:var(--suave);font-size:16px;line-height:1.6;margin:0;align-self:center}
 .kpi .ctx{grid-area:ctx;align-self:end;margin-top:14px;padding-top:12px;border-top:1px dashed var(--borde);font-size:14.5px;line-height:1.45;color:var(--suave)}
 .kpi .ctx b{color:var(--tinta)}
-.kpi .num.doble{display:flex;align-items:flex-start;gap:12px}
-.kpi .num.doble .v{display:flex;flex-direction:column}
-.kpi .num.doble .fl{color:var(--tenue);font-weight:400}
-.kpi .num.doble small{font-size:13px;font-weight:600;letter-spacing:0;line-height:1.3;color:var(--suave);margin-top:6px;max-width:9em}
+.kpi .num.doble{display:grid;grid-template-columns:1fr auto 1fr;align-items:start;column-gap:4px;width:100%;max-width:250px}
+.kpi .num.doble .v{display:flex;flex-direction:column;align-items:center;text-align:center;line-height:1.05}
+.kpi .num.doble .fl{color:var(--tenue);font-weight:400;font-size:.62em;line-height:1.7;text-align:center}
+.kpi .num.doble small{font-size:13px;font-weight:600;letter-spacing:0;line-height:1.3;color:var(--suave);margin-top:8px}
 @media (max-width:1080px){.kpi{grid-template-columns:minmax(200px,250px) 1fr;grid-template-areas:"etq que" "num que" "tit ctx" "graf graf"}.kpi .graf{justify-self:start;margin-top:16px}}
 @media (max-width:760px){.kpi{grid-template-columns:1fr;grid-template-areas:"etq" "num" "tit" "que" "graf" "ctx";padding:20px 20px}.kpi .que{margin-top:12px}.kpi .graf{max-width:100%;overflow-x:auto}}
 .guia{color:var(--suave);font-size:15px;max-width:none}
