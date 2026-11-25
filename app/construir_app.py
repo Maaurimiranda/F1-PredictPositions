@@ -842,6 +842,7 @@ section:last-of-type{border-bottom:0}
 h1{font-size:clamp(32px,5vw,50px);line-height:1.08;letter-spacing:-.025em;margin:14px 0 18px;max-width:20ch}
 h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin:10px 0 12px;max-width:none}
 h4{font-size:15px;margin:22px 0 6px}
+section>h3{font-size:clamp(18px,2.3vw,22px);line-height:1.25;letter-spacing:-.01em;margin:38px 0 10px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
 #portada h1,#portada .idea{max-width:none}
 .kpis{display:grid;grid-template-columns:1fr;gap:16px;margin:8px 0 28px}
@@ -985,6 +986,17 @@ footer{max-width:1040px;margin:0 auto;padding:26px 20px 50px;color:var(--tenue);
   <div class="grafico" id="g-modelo"></div>
   <p class="lectura">__L_TABLA__</p>
   <details class="como"><summary>Cómo lo sabemos <small>métrica, validación, comparación de modelos, test, errores y en qué se apoya</small></summary><div class="cuerpo">__C_MODELO__</div></details>
+  <h3>La tabla completa de cada carrera</h3>
+  <p class="lectura">El MAE mide al modelo piloto por piloto. Pero lo que se predice, en el fondo, es una tabla de posiciones, así que también
+  la comparamos entera con la tabla final, carrera por carrera. Para cada carrera se ordena a los pilotos según la predicción
+  (si dos empatan, adelante el que va adelante) y se calcula:</p>
+  <p class="lectura"><strong>Spearman</strong>: la correlación entre el puesto predicho y el puesto final de cada piloto de esa carrera. Compara
+  órdenes, no distancias: da 1 si las dos tablas son idénticas y 0 si no tienen nada que ver. <strong>Podio</strong>: de los 3
+  primeros de la tabla predicha, qué parte terminó en el podio. <strong>Top 10</strong>: de los 10 primeros predichos, qué
+  parte sumó puntos. Después se promedia sobre las carreras. La regla «termina donde está» también arma una tabla (la grilla, o
+  el orden en ese momento), y se mide igual. Estos números no cambiaron ninguna decisión: el modelo ya estaba elegido con el MAE.</p>
+  <div class="grafico" id="g-tabla"></div>
+  <details class="como"><summary>Cómo lo sabemos <small>los números de la validación y del test, carrera por carrera</small></summary><div class="cuerpo">__C_TABLA__</div></details>
 </section>
 
 <section id="explora">
@@ -1612,16 +1624,6 @@ def como_tabla(R):
              f"{f(r['podio_m_test'])} / {f(r['podio_r_test'])}", f"{f(r['top10_m_test'])} / {f(r['top10_r_test'])}"]
             for _, r in tr.iterrows()]
     return f"""
-<h4>La tabla completa de cada carrera</h4>
-<p>El MAE mide al modelo piloto por piloto. Pero lo que se predice, en el fondo, es una tabla de posiciones, así que también
-la comparamos entera con la tabla final, carrera por carrera. Para cada carrera se ordena a los pilotos según la predicción
-(si dos empatan, adelante el que va adelante) y se calcula:</p>
-<p><strong>Spearman</strong>: la correlación entre el puesto predicho y el puesto final de cada piloto de esa carrera. Compara
-órdenes, no distancias: da 1 si las dos tablas son idénticas y 0 si no tienen nada que ver. <strong>Podio</strong>: de los 3
-primeros de la tabla predicha, qué parte terminó en el podio. <strong>Top 10</strong>: de los 10 primeros predichos, qué
-parte sumó puntos. Después se promedia sobre las carreras. La regla «termina donde está» también arma una tabla (la grilla, o
-el orden en ese momento), y se mide igual. Estos números no cambiaron ninguna decisión: el modelo ya estaba elegido con el MAE.</p>
-<div class="grafico" id="g-tabla"></div>
 {tabla(["Validación 2022–2025", "Spearman, modelo", "Spearman, regla", "Cortes en que gana el modelo",
         "Podio, modelo / regla", "Top 10, modelo / regla"], val, "num")}
 {tabla(["Test 2026", "Spearman, modelo", "Spearman, regla", "Carreras mejor / igual / peor",
@@ -1705,7 +1707,6 @@ predicciones de cada carrera se ordenan 1, 2, 3…, porque no puede haber dos pi
 {tabla(["Momento", "Modelo", "«Termina donde está»", "Piso", "Modelo en validación", "Carreras mejor / igual / peor que la regla"], test, "num")}
 <p class="nota">La ventaja medida en 2022–2025 no se sostuvo entera. La lluvia no lo explica (2026 tuvo 1 carrera con lluvia de 14;
 la validación, 9 de 75). Quedan el reglamento nuevo o una racha, y con 14 carreras no alcanza para distinguirlos.</p>
-{como_tabla(R)}
 <h4>Dónde se equivoca (test 2026: error del modelo / de la regla, y cuántos pilotos)</h4>
 {tabla(["Situación", *MOMS], sit, "num")}
 <p class="nota">Los errores grandes son los abandonos después del corte: erran entre {f(sit_d['modelo'].min(), 1)} y
@@ -1745,7 +1746,7 @@ entre el puesto que le da la tabla predicha a cada piloto (ordenando por la pred
 puesto final; con un piloto elegido sigue siendo la de la carrera entera. El podio y la zona de puntos del encabezado cuentan
 cuántos de los 3 y de los 10 primeros predichos terminaron ahí. A la regla «termina donde está» se le calcula lo mismo,
 usando como predicción la posición en ese momento (antes de largar, la grilla). Son {len(pc)} combinaciones de carrera y
-momento; sus promedios por momento son los de la tabla completa en el «Cómo lo sabemos» del modelo.</p>
+momento; sus promedios por momento son los de «La tabla completa de cada carrera», en la parte del modelo.</p>
 <h4>Las dos vistas de la carrera</h4>
 <p>«Las dos tablas»: a la izquierda, los pilotos ordenados por la predicción; a la derecha, por el puesto final. El color de
 cada línea es la diferencia entre el puesto predicho y el real (1 o menos, 2 a 4, 5 o más); punteada si abandonó (estado
@@ -1860,7 +1861,7 @@ def pagina(R, N, hist, corr, salida):
             .replace("__T_HALLAZGO__", z["t_hallazgo"]).replace("__L_HALLAZGO__", z["l_hallazgo"])
             .replace("__C_HALLAZGO__", como_hallazgo(corr))
             .replace("__T_MODELO__", z["t_modelo"]).replace("__L_MODELO__", z["l_modelo"]).replace("__L_TABLA__", z["l_tabla"])
-            .replace("__C_MODELO__", como_modelo(R, mod, regla))
+            .replace("__C_MODELO__", como_modelo(R, mod, regla)).replace("__C_TABLA__", como_tabla(R))
             .replace("__N_EXPLORA__", n(len(e))).replace("__CARRERAS_EXPLORA__", str(e["c"].nunique()))
             .replace("__C_EXPLORA__", como_explora(R, N, e)).replace("__C_PROBA__", como_proba(R))
             .replace("__FECHA__", time.strftime("%d/%m/%Y"))

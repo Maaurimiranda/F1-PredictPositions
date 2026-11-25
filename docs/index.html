@@ -35,6 +35,7 @@ section:last-of-type{border-bottom:0}
 h1{font-size:clamp(32px,5vw,50px);line-height:1.08;letter-spacing:-.025em;margin:14px 0 18px;max-width:20ch}
 h2{font-size:clamp(22px,3vw,29px);line-height:1.22;letter-spacing:-.015em;margin:10px 0 12px;max-width:none}
 h4{font-size:15px;margin:22px 0 6px}
+section>h3{font-size:clamp(18px,2.3vw,22px);line-height:1.25;letter-spacing:-.01em;margin:38px 0 10px}
 .idea{font-size:clamp(18px,2.2vw,22px);line-height:1.5;max-width:46ch;color:#2b2a26;margin:0 0 26px}
 #portada h1,#portada .idea{max-width:none}
 .kpis{display:grid;grid-template-columns:1fr;gap:16px;margin:8px 0 28px}
@@ -261,22 +262,6 @@ predicciones de cada carrera se ordenan 1, 2, 3…, porque no puede haber dos pi
 <p class="nota">La ventaja medida en 2022–2025 no se sostuvo entera. La lluvia no lo explica (2026 tuvo 1 carrera con lluvia de 14;
 la validación, 9 de 75). Quedan el reglamento nuevo o una racha, y con 14 carreras no alcanza para distinguirlos.</p>
 
-<h4>La tabla completa de cada carrera</h4>
-<p>El MAE mide al modelo piloto por piloto. Pero lo que se predice, en el fondo, es una tabla de posiciones, así que también
-la comparamos entera con la tabla final, carrera por carrera. Para cada carrera se ordena a los pilotos según la predicción
-(si dos empatan, adelante el que va adelante) y se calcula:</p>
-<p><strong>Spearman</strong>: la correlación entre el puesto predicho y el puesto final de cada piloto de esa carrera. Compara
-órdenes, no distancias: da 1 si las dos tablas son idénticas y 0 si no tienen nada que ver. <strong>Podio</strong>: de los 3
-primeros de la tabla predicha, qué parte terminó en el podio. <strong>Top 10</strong>: de los 10 primeros predichos, qué
-parte sumó puntos. Después se promedia sobre las carreras. La regla «termina donde está» también arma una tabla (la grilla, o
-el orden en ese momento), y se mide igual. Estos números no cambiaron ninguna decisión: el modelo ya estaba elegido con el MAE.</p>
-<div class="grafico" id="g-tabla"></div>
-<div class="tabla"><table class="num"><thead><tr><th>Validación 2022–2025</th><th>Spearman, modelo</th><th>Spearman, regla</th><th>Cortes en que gana el modelo</th><th>Podio, modelo / regla</th><th>Top 10, modelo / regla</th></tr></thead><tbody><tr><td>Antes de largar</td><td>0,688 ± 0,056</td><td>0,653 ± 0,075</td><td>5 de 5</td><td>0,70 / 0,69</td><td>0,80 / 0,78</td></tr><tr><td>25 %</td><td>0,783 ± 0,032</td><td>0,747 ± 0,026</td><td>5 de 5</td><td>0,75 / 0,74</td><td>0,83 / 0,81</td></tr><tr><td>50 %</td><td>0,859 ± 0,014</td><td>0,844 ± 0,023</td><td>5 de 5</td><td>0,83 / 0,82</td><td>0,87 / 0,85</td></tr><tr><td>75 %</td><td>0,906 ± 0,020</td><td>0,899 ± 0,024</td><td>5 de 5</td><td>0,88 / 0,88</td><td>0,91 / 0,90</td></tr></tbody></table></div>
-<div class="tabla"><table class="num"><thead><tr><th>Test 2026</th><th>Spearman, modelo</th><th>Spearman, regla</th><th>Carreras mejor / igual / peor</th><th>Podio, modelo / regla</th><th>Top 10, modelo / regla</th></tr></thead><tbody><tr><td>Antes de largar</td><td>0,690</td><td>0,682</td><td>5 / 0 / 9</td><td>0,62 / 0,62</td><td>0,77 / 0,76</td></tr><tr><td>25 %</td><td>0,823</td><td>0,821</td><td>4 / 1 / 9</td><td>0,76 / 0,74</td><td>0,86 / 0,85</td></tr><tr><td>50 %</td><td>0,880</td><td>0,882</td><td>7 / 3 / 4</td><td>0,74 / 0,76</td><td>0,88 / 0,86</td></tr><tr><td>75 %</td><td>0,914</td><td>0,918</td><td>2 / 1 / 11</td><td>0,79 / 0,81</td><td>0,91 / 0,91</td></tr></tbody></table></div>
-<p class="nota">La historia es la misma que con el MAE. La tabla del modelo se parece más a la final que la de la regla,
-sobre todo antes de largar y al 25 %, y ordena mejor la zona de puntos. El podio casi no cambia: con los que van adelante el
-modelo tiene poco para agregar. En 2026 las dos tablas quedan prácticamente iguales. En «Explorá» se puede ver cada carrera
-como dos tablas lado a lado.</p>
 <h4>Dónde se equivoca (test 2026: error del modelo / de la regla, y cuántos pilotos)</h4>
 <div class="tabla"><table class="num"><thead><tr><th>Situación</th><th>Antes de largar</th><th>25 %</th><th>50 %</th><th>75 %</th></tr></thead><tbody><tr><td>terminó la carrera</td><td>2,08 / 2,44 <span class='n'>(244)</span></td><td>2,00 / 2,11 <span class='n'>(244)</span></td><td>1,46 / 1,49 <span class='n'>(244)</span></td><td>1,12 / 1,05 <span class='n'>(244)</span></td></tr><tr><td>abandonó después del corte</td><td>7,13 / 6,09 <span class='n'>(57)</span></td><td>4,74 / 4,67 <span class='n'>(39)</span></td><td>5,26 / 5,30 <span class='n'>(27)</span></td><td>6,40 / 5,93 <span class='n'>(15)</span></td></tr><tr><td>ya había abandonado al corte</td><td>—</td><td>1,61 / 0,00 <span class='n'>(18)</span></td><td>0,00 / 0,00 <span class='n'>(30)</span></td><td>0,17 / 0,00 <span class='n'>(42)</span></td></tr></tbody></table></div>
 <p class="nota">Los errores grandes son los abandonos después del corte: erran entre 4,7 y
@@ -295,6 +280,23 @@ respuesta adentro, la regla no erraría entre 1,40 y 3,31 puestos.</p>
 <p>Antes de largar, «Probá el modelo» usa un árbol en lugar del boosting elegido, porque el boosting no se puede escribir
 en la página. Los números y la justificación están en el «Cómo lo sabemos» de esa sección. En «Explorá» y en todo el
 tallo, los números son los del boosting.</p></div></details>
+  <h3>La tabla completa de cada carrera</h3>
+  <p class="lectura">El MAE mide al modelo piloto por piloto. Pero lo que se predice, en el fondo, es una tabla de posiciones, así que también
+la comparamos entera con la tabla final, carrera por carrera. Para cada carrera se ordena a los pilotos según la predicción
+(si dos empatan, adelante el que va adelante) y se calcula:</p>
+  <p class="lectura"><strong>Spearman</strong>: la correlación entre el puesto predicho y el puesto final de cada piloto de esa carrera. Compara
+órdenes, no distancias: da 1 si las dos tablas son idénticas y 0 si no tienen nada que ver. <strong>Podio</strong>: de los 3
+primeros de la tabla predicha, qué parte terminó en el podio. <strong>Top 10</strong>: de los 10 primeros predichos, qué
+parte sumó puntos. Después se promedia sobre las carreras. La regla «termina donde está» también arma una tabla (la grilla, o
+el orden en ese momento), y se mide igual. Estos números no cambiaron ninguna decisión: el modelo ya estaba elegido con el MAE.</p>
+  <div class="grafico" id="g-tabla"></div>
+  <details class="como"><summary>Cómo lo sabemos <small>los números de la validación y del test, carrera por carrera</small></summary><div class="cuerpo">
+<div class="tabla"><table class="num"><thead><tr><th>Validación 2022–2025</th><th>Spearman, modelo</th><th>Spearman, regla</th><th>Cortes en que gana el modelo</th><th>Podio, modelo / regla</th><th>Top 10, modelo / regla</th></tr></thead><tbody><tr><td>Antes de largar</td><td>0,688 ± 0,056</td><td>0,653 ± 0,075</td><td>5 de 5</td><td>0,70 / 0,69</td><td>0,80 / 0,78</td></tr><tr><td>25 %</td><td>0,783 ± 0,032</td><td>0,747 ± 0,026</td><td>5 de 5</td><td>0,75 / 0,74</td><td>0,83 / 0,81</td></tr><tr><td>50 %</td><td>0,859 ± 0,014</td><td>0,844 ± 0,023</td><td>5 de 5</td><td>0,83 / 0,82</td><td>0,87 / 0,85</td></tr><tr><td>75 %</td><td>0,906 ± 0,020</td><td>0,899 ± 0,024</td><td>5 de 5</td><td>0,88 / 0,88</td><td>0,91 / 0,90</td></tr></tbody></table></div>
+<div class="tabla"><table class="num"><thead><tr><th>Test 2026</th><th>Spearman, modelo</th><th>Spearman, regla</th><th>Carreras mejor / igual / peor</th><th>Podio, modelo / regla</th><th>Top 10, modelo / regla</th></tr></thead><tbody><tr><td>Antes de largar</td><td>0,690</td><td>0,682</td><td>5 / 0 / 9</td><td>0,62 / 0,62</td><td>0,77 / 0,76</td></tr><tr><td>25 %</td><td>0,823</td><td>0,821</td><td>4 / 1 / 9</td><td>0,76 / 0,74</td><td>0,86 / 0,85</td></tr><tr><td>50 %</td><td>0,880</td><td>0,882</td><td>7 / 3 / 4</td><td>0,74 / 0,76</td><td>0,88 / 0,86</td></tr><tr><td>75 %</td><td>0,914</td><td>0,918</td><td>2 / 1 / 11</td><td>0,79 / 0,81</td><td>0,91 / 0,91</td></tr></tbody></table></div>
+<p class="nota">La historia es la misma que con el MAE. La tabla del modelo se parece más a la final que la de la regla,
+sobre todo antes de largar y al 25 %, y ordena mejor la zona de puntos. El podio casi no cambia: con los que van adelante el
+modelo tiene poco para agregar. En 2026 las dos tablas quedan prácticamente iguales. En «Explorá» se puede ver cada carrera
+como dos tablas lado a lado.</p></div></details>
 </section>
 
 <section id="explora">
@@ -347,7 +349,7 @@ entre el puesto que le da la tabla predicha a cada piloto (ordenando por la pred
 puesto final; con un piloto elegido sigue siendo la de la carrera entera. El podio y la zona de puntos del encabezado cuentan
 cuántos de los 3 y de los 10 primeros predichos terminaron ahí. A la regla «termina donde está» se le calcula lo mismo,
 usando como predicción la posición en ese momento (antes de largar, la grilla). Son 356 combinaciones de carrera y
-momento; sus promedios por momento son los de la tabla completa en el «Cómo lo sabemos» del modelo.</p>
+momento; sus promedios por momento son los de «La tabla completa de cada carrera», en la parte del modelo.</p>
 <h4>Las dos vistas de la carrera</h4>
 <p>«Las dos tablas»: a la izquierda, los pilotos ordenados por la predicción; a la derecha, por el puesto final. El color de
 cada línea es la diferencia entre el puesto predicho y el real (1 o menos, 2 a 4, 5 o más); punteada si abandonó (estado
