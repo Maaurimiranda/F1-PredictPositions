@@ -129,7 +129,7 @@ En GitHub (lo hace quien administra el repositorio): *Settings → Pages → Bui
 
 ### Qué cambió desde la Entrega 3
 
-- **Faltaba una métrica que mida a cada piloto en el contexto de los demás.** El MAE mide el error piloto por piloto; agregamos la comparación de la tabla completa de cada carrera contra la tabla final: correlación de Spearman entre el puesto predicho y el puesto final (carrera por carrera), y aciertos del podio y del top 10. Está en el notebook (sección 6, «La tabla completa de cada carrera»), en el «Cómo lo sabemos» del modelo, y en «Explorá», donde cada carrera se puede medir con Spearman y abrir como dos tablas lado a lado. No cambió ninguna decisión: el modelo ya estaba elegido con el MAE.
+- **Faltaba una métrica que mida a cada piloto en el contexto de los demás.** El MAE mide el error piloto por piloto; agregamos la comparación de la tabla completa de cada carrera contra la tabla final: correlación de Spearman entre el puesto predicho y el puesto final (carrera por carrera), y aciertos del podio y del top 10. Está en el notebook (sección 6, «La tabla completa de cada carrera»), en la parte del modelo de la página (subsección «La tabla completa de cada carrera», con el gráfico a la vista y los números en su «Cómo lo sabemos»), y en «Explorá», donde cada carrera se puede medir con Spearman y abrir como dos tablas lado a lado. No cambió ninguna decisión: el modelo ya estaba elegido con el MAE.
 
 ## Estructura del repositorio
 
